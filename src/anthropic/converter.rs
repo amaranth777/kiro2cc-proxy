@@ -1265,6 +1265,13 @@ fn model_max_output_tokens(model: &str) -> i32 {
 
 /// 构建 additionalModelRequestFields（thinking、output_config、max_tokens）
 fn build_additional_model_request_fields(req: &MessagesRequest) -> Option<serde_json::Value> {
+    // Kiro 后端仅 Claude 系列模型支持 additionalModelRequestFields。
+    // 非 Claude 模型（glm-5/deepseek/qwen/minimax 等）附带该字段会被后端
+    // 以 400 "additionalModelRequestFields is not supported for this model" 拒绝。
+    if !req.model.to_lowercase().starts_with("claude") {
+        return None;
+    }
+
     let mut fields = serde_json::Map::new();
 
     if let Some(t) = &req.thinking {
@@ -1289,7 +1296,8 @@ fn build_additional_model_request_fields(req: &MessagesRequest) -> Option<serde_
 
     if req.max_tokens > 0 {
         let cap = model_max_output_tokens(&req.model);
-        let capped = req.max_tokens.min(cap);
+        // Kiro 后端硬限制：additionalModelRequestFields.max_tokens >= 1024
+        let capped = req.max_tokens.min(cap).max(1024);
         fields.insert("max_tokens".into(), serde_json::json!(capped));
     }
 

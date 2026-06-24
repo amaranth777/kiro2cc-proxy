@@ -56,9 +56,10 @@ pub fn build_client(
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(30));
 
-    if tls_backend == TlsBackend::Rustls {
-        builder = builder.use_rustls_tls();
-    }
+    // native-tls 已从依赖中移除（项目仅用 rustls）；
+    // 无论配置为 Rustls 还是 NativeTls，统一使用 rustls 后端。
+    builder = builder.use_rustls_tls();
+    let _ = tls_backend; // 保留参数以兼容配置结构
 
     if let Some(proxy_config) = proxy {
         let mut proxy = Proxy::all(&proxy_config.url)?;

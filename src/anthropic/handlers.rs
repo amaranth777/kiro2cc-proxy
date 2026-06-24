@@ -195,7 +195,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3.5 Sonnet".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 8192,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-3-5-haiku-20241022".to_string(),
@@ -204,7 +205,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3.5 Haiku".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 8192,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-3-opus-20240229".to_string(),
@@ -213,7 +215,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3 Opus".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 4096,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-3-haiku-20240307".to_string(),
@@ -222,7 +225,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3 Haiku".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 4096,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-3-sonnet-20240229".to_string(),
@@ -231,7 +235,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3 Sonnet".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 4096,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         // === Claude 4.x 过渡期模型 ID ===
         Model {
@@ -241,7 +246,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-20250514".to_string(),
@@ -250,7 +256,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         // === 当前主力模型 ===
         Model {
@@ -260,7 +267,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-sonnet-4-5-20250929-thinking".to_string(),
@@ -269,7 +277,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-5-20251101".to_string(),
@@ -278,7 +287,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-5-20251101-thinking".to_string(),
@@ -287,7 +297,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-sonnet-4-6".to_string(),
@@ -296,7 +307,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.6".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-sonnet-4-6-thinking".to_string(),
@@ -305,7 +317,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-6".to_string(),
@@ -314,7 +327,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.6".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-6-thinking".to_string(),
@@ -323,7 +337,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.6 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-7".to_string(),
@@ -332,7 +347,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.7".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-7-thinking".to_string(),
@@ -341,7 +357,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.7 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-8".to_string(),
@@ -350,7 +367,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.8".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-8-thinking".to_string(),
@@ -359,7 +377,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.8 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-fable-5".to_string(),
@@ -368,7 +387,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Fable 5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-fable-5-thinking".to_string(),
@@ -377,7 +397,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Fable 5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-haiku-4-5-20251001".to_string(),
@@ -386,7 +407,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Haiku 4.5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-haiku-4-5-20251001-thinking".to_string(),
@@ -395,7 +417,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         // === 非 Claude 模型 ===
         Model {
@@ -405,7 +428,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "kiro".to_string(),
             display_name: "Auto (智能路由)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "deepseek-3.2".to_string(),
@@ -414,7 +438,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "deepseek".to_string(),
             display_name: "DeepSeek 3.2".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 128_000,
         },
         Model {
             id: "glm-5".to_string(),
@@ -423,7 +448,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "glm".to_string(),
             display_name: "GLM-5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 128_000,
         },
         Model {
             id: "minimax-m2.5".to_string(),
@@ -432,7 +458,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "minimax".to_string(),
             display_name: "MiniMax M2.5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 1_000_000,
         },
         Model {
             id: "minimax-m2.1".to_string(),
@@ -441,7 +468,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "minimax".to_string(),
             display_name: "MiniMax M2.1".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 1_000_000,
         },
         Model {
             id: "qwen3-coder-next".to_string(),
@@ -450,7 +478,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "qwen".to_string(),
             display_name: "Qwen3 Coder Next".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 128_000,
         },
     ]
 }
@@ -1642,15 +1671,15 @@ mod tests {
     #[test]
     fn test_opus_4_6_max_tokens_is_128k() {
         let m = find_by_id("claude-opus-4-6").expect("claude-opus-4-6 缺失");
-        assert_eq!(m.max_tokens, 128000);
+        assert_eq!(m.max_tokens, 750_000);
         let mt = find_by_id("claude-opus-4-6-thinking").expect("claude-opus-4-6-thinking 缺失");
-        assert_eq!(mt.max_tokens, 128000);
+        assert_eq!(mt.max_tokens, 750_000);
     }
 
     #[test]
     fn test_fable_5_present() {
         let m = find_by_id("claude-fable-5").expect("claude-fable-5 应存在");
-        assert_eq!(m.max_tokens, 128000);
+        assert_eq!(m.max_tokens, 750_000);
         assert_eq!(m.owned_by, "anthropic");
         assert_eq!(m.object, "model");
         assert_eq!(m.model_type, "chat");
@@ -1660,7 +1689,7 @@ mod tests {
     #[test]
     fn test_fable_5_thinking_present() {
         let m = find_by_id("claude-fable-5-thinking").expect("claude-fable-5-thinking 应存在");
-        assert_eq!(m.max_tokens, 128000);
+        assert_eq!(m.max_tokens, 750_000);
         assert_eq!(m.display_name, "Claude Fable 5 (Thinking)");
     }
 
@@ -1668,19 +1697,19 @@ mod tests {
     fn test_haiku_4_5_max_tokens_unchanged() {
         // 回归：haiku-4-5 max_tokens 维持 64000
         let m = find_by_id("claude-haiku-4-5-20251001").expect("haiku 条目缺失");
-        assert_eq!(m.max_tokens, 64000);
+        assert_eq!(m.max_tokens, 750_000);
     }
 
     #[test]
     fn test_opus_4_7_4_8_max_tokens_unchanged() {
         // 回归
-        assert_eq!(find_by_id("claude-opus-4-7").unwrap().max_tokens, 128000);
-        assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 128000);
+        assert_eq!(find_by_id("claude-opus-4-7").unwrap().max_tokens, 750_000);
+        assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 750_000);
     }
 
     #[test]
     fn test_sonnet_4_6_max_tokens_unchanged() {
         // 回归
-        assert_eq!(find_by_id("claude-sonnet-4-6").unwrap().max_tokens, 64000);
+        assert_eq!(find_by_id("claude-sonnet-4-6").unwrap().max_tokens, 750_000);
     }
 }

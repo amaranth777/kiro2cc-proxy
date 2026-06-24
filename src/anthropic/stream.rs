@@ -543,7 +543,7 @@ impl SseStateManager {
 /// final_input_tokens 不再依赖 Kiro `contextUsageEvent` 反算；如需差异化窗口
 /// 可恢复 match 分支。
 pub(crate) fn context_window_for_model(_model: &str) -> i32 {
-    1_000_000
+    750_000
 }
 
 /// 空响应判定为「上下文过大」的输入 token 阈值（取窗口的 45%）。
@@ -562,7 +562,7 @@ const OUTPUT_TOKENS_REPORT_CAP: i32 = 380;
 /// 仅影响给客户端（如 Claude Code）看到的 usage.input_tokens / cache_* 字段，
 /// 让客户端按内置窗口（200K）计算的上下文百分比按比例下降，营造"窗口未满"的视觉。
 /// 内部计费与 usage_tracker 入库仍写入真实值，admin/user UI 显示不受影响。
-const CLIENT_TOKEN_DISPLAY_SCALE: f64 = 0.2;
+const CLIENT_TOKEN_DISPLAY_SCALE: f64 = 1.0;
 
 /// 对客户端展示用的 token 值缩放（向上取整保证非零）
 pub(crate) fn scale_for_client(n: i32) -> i32 {
@@ -2522,39 +2522,39 @@ mod tests {
 
     #[test]
     fn test_context_window_opus_4_6_is_1m() {
-        assert_eq!(context_window_for_model("claude-opus-4-6"), 1_000_000);
+        assert_eq!(context_window_for_model("claude-opus-4-6"), 750_000);
         assert_eq!(
             context_window_for_model("claude-opus-4-6-thinking"),
-            1_000_000
+            750_000
         );
     }
 
     #[test]
     fn test_context_window_fable_5_is_1m() {
-        assert_eq!(context_window_for_model("claude-fable-5"), 1_000_000);
+        assert_eq!(context_window_for_model("claude-fable-5"), 750_000);
         assert_eq!(
             context_window_for_model("claude-fable-5-thinking"),
-            1_000_000
+            750_000
         );
     }
 
     #[test]
     fn test_context_window_all_models_unified_to_1m() {
-        // contextUsage 本地化后所有模型统一返回 1M
+        // contextUsage 本地化后所有模型统一返回 750K
         assert_eq!(
             context_window_for_model("claude-haiku-4-5-20251001"),
-            1_000_000
+            750_000
         );
-        assert_eq!(context_window_for_model("unknown-model"), 1_000_000);
-        assert_eq!(context_window_for_model(""), 1_000_000);
+        assert_eq!(context_window_for_model("unknown-model"), 750_000);
+        assert_eq!(context_window_for_model(""), 750_000);
     }
 
     #[test]
     fn test_context_window_existing_branches_unchanged() {
-        // 回归：4-7 / 4-8 / sonnet-4-6 仍为 1M
-        assert_eq!(context_window_for_model("claude-opus-4-7"), 1_000_000);
-        assert_eq!(context_window_for_model("claude-opus-4-8"), 1_000_000);
-        assert_eq!(context_window_for_model("claude-sonnet-4-6"), 1_000_000);
+        // 回归：4-7 / 4-8 / sonnet-4-6 仍为 750K
+        assert_eq!(context_window_for_model("claude-opus-4-7"), 750_000);
+        assert_eq!(context_window_for_model("claude-opus-4-8"), 750_000);
+        assert_eq!(context_window_for_model("claude-sonnet-4-6"), 750_000);
     }
 
 }
