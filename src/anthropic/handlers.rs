@@ -874,8 +874,21 @@ fn create_sse_stream(
                         }
                         Some(Err(e)) => {
                             tracing::error!("读取响应流失败: {}", e);
-                            // 发送最终事件并结束
-                            let final_events = ctx.generate_final_events();
+                            let final_events = if ctx.is_empty_response() {
+                                let oversized = ctx.empty_response_is_oversized_context();
+                                tracing::warn!(
+                                    oversized_context = oversized,
+                                    est_input_tokens = ctx.input_tokens,
+                                    "流解码错误且无内容，补发 error 事件"
+                                );
+                                if oversized {
+                                    ctx.generate_final_events()
+                                } else {
+                                    vec![empty_response_error_event(false)]
+                                }
+                            } else {
+                                ctx.generate_final_events()
+                            };
                             let bytes: Vec<Result<Bytes, Infallible>> = final_events
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
@@ -883,10 +896,6 @@ fn create_sse_stream(
                             Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
                         }
                         None => {
-                            // 流结束。先检测上游是否返回了完全空的响应
-                            // （超大上下文等场景上游会返回 200 + 空流），
-                            // 若空则补发 error 事件，而非静默的空 end_turn
-                            // （后者会让客户端表现为卡住/工具调用不执行）。
                             let mut out_events = Vec::new();
                             if ctx.is_empty_response() {
                                 let oversized = ctx.empty_response_is_oversized_context();
@@ -895,7 +904,11 @@ fn create_sse_stream(
                                     est_input_tokens = ctx.input_tokens,
                                     "上游返回空响应（无任何内容事件），补发 error 事件"
                                 );
-                                out_events.push(empty_response_error_event(oversized));
+                                if oversized {
+                                    out_events = ctx.generate_final_events();
+                                } else {
+                                    out_events.push(empty_response_error_event(false));
+                                }
                             } else {
                                 out_events = ctx.generate_final_events();
                             }
@@ -1180,13 +1193,13 @@ async fn handle_non_stream_request(
         "stop_sequence": null,
         // 客户端展示缩放（output_tokens 不缩放）；tracker 已写入真实值
         "usage": {
-            "input_tokens": super::stream::scale_for_client(report_input),
+            "input_tokens": super::stream::scale_for_client(report_input, model),
             "output_tokens": reported_output_tokens,
-            "cache_creation_input_tokens": super::stream::scale_for_client(report_cache_creation),
-            "cache_read_input_tokens": super::stream::scale_for_client(report_cache_read),
+            "cache_creation_input_tokens": super::stream::scale_for_client(report_cache_creation, model),
+            "cache_read_input_tokens": super::stream::scale_for_client(report_cache_read, model),
             "cache_creation": {
-                "ephemeral_5m_input_tokens": super::stream::scale_for_client(report_creation_5m),
-                "ephemeral_1h_input_tokens": super::stream::scale_for_client(report_creation_1h)
+                "ephemeral_5m_input_tokens": super::stream::scale_for_client(report_creation_5m, model),
+                "ephemeral_1h_input_tokens": super::stream::scale_for_client(report_creation_1h, model)
             }
         }
     });
@@ -1642,8 +1655,20 @@ fn create_buffered_sse_stream(
                             }
                             Some(Err(e)) => {
                                 tracing::error!("读取响应流失败: {}", e);
-                                // 发生错误，完成处理并返回所有事件
-                                let all_events = ctx.finish_and_get_all_events();
+                                let all_events = if ctx.is_empty_response() {
+                                    let oversized = ctx.empty_response_is_oversized_context();
+                                    tracing::warn!(
+                                        oversized_context = oversized,
+                                        "流解码错误且无内容（buffered 路径），补发 error 事件"
+                                    );
+                                    if oversized {
+                                        ctx.finish_and_get_all_events()
+                                    } else {
+                                        vec![empty_response_error_event(false)]
+                                    }
+                                } else {
+                                    ctx.finish_and_get_all_events()
+                                };
                                 let bytes: Vec<Result<Bytes, Infallible>> = all_events
                                     .into_iter()
                                     .map(|e| Ok(Bytes::from(e.to_sse_string())))
@@ -1651,17 +1676,17 @@ fn create_buffered_sse_stream(
                                 return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, deadline)));
                             }
                             None => {
-                                // 流结束。先检测上游空响应（与流式路径一致），
-                                // 若空则补发 error 事件（大输入提示压缩上下文，小输入可重试）。
                                 if ctx.is_empty_response() {
                                     let oversized = ctx.empty_response_is_oversized_context();
                                     tracing::warn!(
                                         oversized_context = oversized,
                                         "上游返回空响应（buffered 路径，无任何内容事件），补发 error 事件"
                                     );
-                                    let err_event = empty_response_error_event(oversized);
-                                    let bytes = vec![Ok(Bytes::from(err_event.to_sse_string()))];
-                                    return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, deadline)));
+                                    if !oversized {
+                                        let err_event = empty_response_error_event(false);
+                                        let bytes = vec![Ok(Bytes::from(err_event.to_sse_string()))];
+                                        return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, deadline)));
+                                    }
                                 }
                                 // 流结束，完成处理并返回所有事件（已更正 input_tokens）
                                 let all_events = ctx.finish_and_get_all_events();
