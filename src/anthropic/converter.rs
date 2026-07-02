@@ -436,6 +436,16 @@ pub fn map_model(model: &str) -> Option<String> {
     if model_lower.contains("sonnet") {
         if model_lower.contains("4-6") || model_lower.contains("4.6") {
             Some("claude-sonnet-4.6".to_string())
+        } else if model_lower.contains("sonnet-5")
+            || model_lower.contains("sonnet5")
+            || model_lower.contains("sonnet-4-7")
+            || model_lower.contains("sonnet-4.7")
+        {
+            // Kiro 后端上线的 Sonnet 5，真实 ID 为纯横线版 claude-sonnet-5
+            // （点号版 claude-sonnet-5.0 无效）。thinking 走 additionalModelRequestFields。
+            // 注意锚点必须是 "sonnet-5"/"sonnet5"，不能用裸 "-5"：老 ID
+            // claude-sonnet-4-5-20250929 含子串 "-5" 会被误命中。
+            Some("claude-sonnet-5".to_string())
         } else {
             Some("claude-sonnet-4.5".to_string())
         }
