@@ -1,8 +1,8 @@
 {
   "host": "0.0.0.0",
   "port": 8787,
-  "apiKey": "sk-lumi-local-kiro-2026",
-  "adminApiKey": "lumi-admin-020701",
+  "apiKey": "replace-with-local-api-key",
+  "adminApiKey": "replace-with-local-admin-api-key",
   "tlsBackend": "native-tls",
   "region": "ap-southeast-1",
   "authRegion": "ap-southeast-1",
