@@ -1,0 +1,11 @@
+{
+  "host": "0.0.0.0",
+  "port": 8787,
+  "apiKey": "replace-with-local-api-key",
+  "adminApiKey": "replace-with-local-admin-api-key",
+  "tlsBackend": "native-tls",
+  "region": "ap-southeast-1",
+  "authRegion": "ap-southeast-1",
+  "apiRegion": "us-east-1",
+  "proxyUrl": "http://127.0.0.1:7897"
+}

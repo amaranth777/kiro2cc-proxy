@@ -309,6 +309,101 @@ fn extract_system_reminders(messages: &[super::types::Message]) -> String {
     reminders.join("\n")
 }
 
+/// ⚠️ HIGH-RISK: Hermes-specific system prompt normalization for cross-session cache sharing.
+///
+/// 用途：让拥有相同"语义配置"但不同动态字段的 Hermes session 派生出相同的
+/// conversationId，从而复用 Kiro 服务端 prompt cache，大幅提升缓存命中率。
+///
+/// 原理：Hermes 在 system prompt 里注入了若干 per-session 易变块，导致每次
+/// `derive_fallback_conversation_id` 算出不同的 UUID，Kiro 始终冷启动：
+///   1. `## Current Session Context` 块（含 Source/User/Platform/Delivery 等，每次不同）
+///   2. `Conversation started: <timestamp>` 行
+///   3. `Session ID: / Model: / Provider:` 行
+///   4. MEMORY / USER PROFILE 块（`══════` 围栏，内容随记忆更新而变）
+///
+/// 此函数将上述模式全部 strip，只保留稳定的身份/指令/技能部分参与 hash。
+///
+/// ⚠️ 风险说明（回滚点：git tag pre-system-normalize / commit 4bb72c3）：
+///   - 过度 strip 可能导致两个语义不同的 session 共享 conversationId，
+///     Kiro 将复用错误的历史上下文，产生答案污染。
+///   - 如发现答案异常或跨用户串话，立即执行：
+///       git checkout pre-system-normalize -- src/anthropic/converter.rs
+///       cargo build --release && systemctl --user restart kiro2cc-proxy
+///   - 本改动仅适用于 Hermes → kiro2cc-proxy 场景，不适合提交上游 PR。
+///
+/// 注意：此函数仅用于 conversationId 派生，不修改实际发送给 Kiro 的内容。
+fn normalize_system_for_cache_id(system: &str) -> String {
+    let mut result = String::with_capacity(system.len());
+    let mut lines = system.lines().peekable();
+
+    // 状态机：是否正在跳过某个动态块
+    let mut skip_session_context = false; // ## Current Session Context 块
+    let mut skip_memory_fence = false;    // ══════ 围栏内的 MEMORY/USER PROFILE 块
+
+    while let Some(line) = lines.next() {
+        // ── 1. ══════ 围栏：MEMORY / USER PROFILE 块 ──────────────────────────
+        // 围栏行本身（全部由 ══ 组成，长度 ≥ 20）
+        if line.chars().filter(|&c| c == '═').count() >= 20 {
+            if skip_memory_fence {
+                // 关闭围栏，跳过本行，退出 memory skip 状态
+                skip_memory_fence = false;
+            } else {
+                // 开启围栏，检查下一行是否是 MEMORY/USER PROFILE 标题
+                if let Some(next) = lines.peek() {
+                    let next_trimmed = next.trim();
+                    if next_trimmed.starts_with("MEMORY")
+                        || next_trimmed.starts_with("USER PROFILE")
+                    {
+                        skip_memory_fence = true;
+                        // 跳过本围栏行，后续行在 skip_memory_fence=true 时跳过
+                        continue;
+                    }
+                }
+                // 不是 MEMORY 围栏，正常输出
+                result.push_str(line);
+                result.push('\n');
+            }
+            continue;
+        }
+
+        // 围栏内容行：全部跳过
+        if skip_memory_fence {
+            continue;
+        }
+
+        // ── 2. ## Current Session Context 块 ─────────────────────────────────
+        if line.trim_start().starts_with("## Current Session Context") {
+            skip_session_context = true;
+            continue;
+        }
+        if skip_session_context {
+            // 遇到下一个 ## 标题时退出跳过状态（保留该标题行）
+            if line.trim_start().starts_with("## ") {
+                skip_session_context = false;
+                // 此行是新 section，正常处理（不 continue，走后续逻辑）
+            } else {
+                continue;
+            }
+        }
+
+        // ── 3. 单行易变字段 ───────────────────────────────────────────────────
+        // 格式：`Conversation started: xxx` / `Session ID: xxx` / `Model: xxx` / `Provider: xxx`
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("Conversation started:")
+            || trimmed.starts_with("Session ID:")
+            || trimmed.starts_with("Model:")
+            || trimmed.starts_with("Provider:")
+        {
+            continue;
+        }
+
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    result
+}
+
 /// 将系统提示词中 `x-anthropic-billing-header` 行的 `cch=<value>` 替换为固定值 `0`。
 /// cch 是 Claude Code 每轮注入的计费哈希，对 Kiro 无意义，固定后 history[0] 跨请求稳定，
 /// 使 Kiro 能命中 prompt cache。
@@ -341,6 +436,16 @@ pub fn map_model(model: &str) -> Option<String> {
     if model_lower.contains("sonnet") {
         if model_lower.contains("4-6") || model_lower.contains("4.6") {
             Some("claude-sonnet-4.6".to_string())
+        } else if model_lower.contains("sonnet-5")
+            || model_lower.contains("sonnet5")
+            || model_lower.contains("sonnet-4-7")
+            || model_lower.contains("sonnet-4.7")
+        {
+            // Kiro 后端上线的 Sonnet 5，真实 ID 为纯横线版 claude-sonnet-5
+            // （点号版 claude-sonnet-5.0 无效）。thinking 走 additionalModelRequestFields。
+            // 注意锚点必须是 "sonnet-5"/"sonnet5"，不能用裸 "-5"：老 ID
+            // claude-sonnet-4-5-20250929 含子串 "-5" 会被误命中。
+            Some("claude-sonnet-5".to_string())
         } else {
             Some("claude-sonnet-4.5".to_string())
         }
@@ -372,6 +477,22 @@ pub fn map_model(model: &str) -> Option<String> {
         }
     } else if model_lower.contains("qwen") {
         Some("qwen3-coder-next".to_string())
+    } else if model_lower.contains("gpt-5.6")
+        || model_lower.contains("gpt5.6")
+        || model_lower.contains("gpt-5-6")
+    {
+        // Kiro 后端 2026-07 上线的 GPT-5.6 实验预览三档（272k context）：
+        // sol/terra/luna 是独立档位而非版本迭代，无默认档可兜底，必须精确匹配
+        // 完整名称，否则返回 None（与其它未知模型一致，交给上层报 400）。
+        if model_lower.contains("sol") {
+            Some("gpt-5.6-sol".to_string())
+        } else if model_lower.contains("terra") {
+            Some("gpt-5.6-terra".to_string())
+        } else if model_lower.contains("luna") {
+            Some("gpt-5.6-luna".to_string())
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -496,10 +617,15 @@ fn derive_fallback_conversation_id(req: &MessagesRequest) -> Option<String> {
     if system_seed.is_empty() && tool_names.is_empty() {
         return None;
     }
-    // 仅取 system 前 4096 字符，避免超长 prompt 导致 hash 计算过慢
-    let system_truncated: &str = match system_seed.char_indices().nth(4096) {
-        Some((idx, _)) => &system_seed[..idx],
-        None => &system_seed,
+    // ⚠️ HIGH-RISK: 归一化 system prompt，strip Hermes per-session 易变块，
+    // 使相同语义配置的不同 session 派生出相同 conversationId，提升跨会话缓存命中率。
+    // 回滚：git checkout pre-system-normalize -- src/anthropic/converter.rs
+    let system_normalized = normalize_system_for_cache_id(&system_seed);
+
+    // 仅取归一化后前 4096 字符，避免超长 prompt 导致 hash 计算过慢
+    let system_truncated: &str = match system_normalized.char_indices().nth(4096) {
+        Some((idx, _)) => &system_normalized[..idx],
+        None => &system_normalized,
     };
     let mut hasher = Sha256::new();
     hasher.update(b"fallback-conversation:");
@@ -584,16 +710,31 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
 
     // 3. 生成会话 ID 和代理 ID
     // 优先级：
-    //   1. metadata.user_id 中的 session UUID（Claude Code 标准格式）
-    //   2. system + 工具名集合的 SHA-256 派生（让无 metadata 的第三方客户端也能 sticky）
-    //   3. 完全随机 UUID（仅当无 system 也无工具时）
-    let conversation_id = req
-        .metadata
-        .as_ref()
-        .and_then(|m| m.user_id.as_ref())
-        .and_then(|user_id| extract_session_id(user_id))
-        .or_else(|| derive_fallback_conversation_id(req))
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    //   1. 无 history 的单轮请求（cron job / subagent）→ system+tools SHA-256 派生稳定 ID
+    //      相同 system prompt 的单轮请求共享同一 conversationId，复用 Kiro 服务端 prompt cache
+    //   2. 有 history 的多轮请求 → metadata.user_id 中的 session UUID（Claude Code 标准格式）
+    //   3. system + 工具名集合的 SHA-256 派生（无 metadata 的第三方客户端）
+    //   4. 完全随机 UUID（仅当无 system 也无工具时）
+    let is_single_turn = messages.len() <= 1; // 只有当前 user 消息，无 history
+    let conversation_id = if is_single_turn {
+        // 单轮请求：优先用 system 派生，让所有 cron/subagent 落在同一 session
+        derive_fallback_conversation_id(req)
+            .or_else(|| {
+                req.metadata
+                    .as_ref()
+                    .and_then(|m| m.user_id.as_ref())
+                    .and_then(|user_id| extract_session_id(user_id))
+            })
+            .unwrap_or_else(|| Uuid::new_v4().to_string())
+    } else {
+        // 多轮请求：优先保持 metadata session UUID，保证对话连续性
+        req.metadata
+            .as_ref()
+            .and_then(|m| m.user_id.as_ref())
+            .and_then(|user_id| extract_session_id(user_id))
+            .or_else(|| derive_fallback_conversation_id(req))
+            .unwrap_or_else(|| Uuid::new_v4().to_string())
+    };
     // agentContinuationId 基于 conversationId 派生，保持同一会话内稳定
     // 这样 Kiro 后端能识别连续请求，对历史消息做跨请求 prompt caching
     let agent_continuation_id = derive_agent_continuation_id(&conversation_id);
@@ -1265,6 +1406,13 @@ fn model_max_output_tokens(model: &str) -> i32 {
 
 /// 构建 additionalModelRequestFields（thinking、output_config、max_tokens）
 fn build_additional_model_request_fields(req: &MessagesRequest) -> Option<serde_json::Value> {
+    // Kiro 后端仅 Claude 系列模型支持 additionalModelRequestFields。
+    // 非 Claude 模型（glm-5/deepseek/qwen/minimax 等）附带该字段会被后端
+    // 以 400 "additionalModelRequestFields is not supported for this model" 拒绝。
+    if !req.model.to_lowercase().starts_with("claude") {
+        return None;
+    }
+
     let mut fields = serde_json::Map::new();
 
     if let Some(t) = &req.thinking {
@@ -1289,7 +1437,8 @@ fn build_additional_model_request_fields(req: &MessagesRequest) -> Option<serde_
 
     if req.max_tokens > 0 {
         let cap = model_max_output_tokens(&req.model);
-        let capped = req.max_tokens.min(cap);
+        // Kiro 后端硬限制：additionalModelRequestFields.max_tokens >= 1024
+        let capped = req.max_tokens.min(cap).max(1024);
         fields.insert("max_tokens".into(), serde_json::json!(capped));
     }
 
@@ -1735,6 +1884,46 @@ mod tests {
     #[test]
     fn test_map_model_unsupported() {
         assert!(map_model("gpt-4").is_none());
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_sol() {
+        assert_eq!(map_model("gpt-5.6-sol"), Some("gpt-5.6-sol".to_string()));
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_terra() {
+        assert_eq!(
+            map_model("gpt-5.6-terra"),
+            Some("gpt-5.6-terra".to_string())
+        );
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_luna() {
+        assert_eq!(map_model("gpt-5.6-luna"), Some("gpt-5.6-luna".to_string()));
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_case_insensitive() {
+        assert_eq!(map_model("GPT-5.6-SOL"), Some("gpt-5.6-sol".to_string()));
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_without_dot() {
+        // 兼容客户端可能传 gpt5.6-terra（无横线）或 gpt-5-6-terra（点号变横线）
+        assert_eq!(map_model("gpt5.6-terra"), Some("gpt-5.6-terra".to_string()));
+        assert_eq!(
+            map_model("gpt-5-6-terra"),
+            Some("gpt-5.6-terra".to_string())
+        );
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_unknown_variant_is_unsupported() {
+        // sol/terra/luna 是互不兼容的独立档位，无默认档可兜底，
+        // 未知变体（如打错字）必须返回 None，不能悄悄猜测映射到某一档
+        assert!(map_model("gpt-5.6-mars").is_none());
     }
 
     #[test]

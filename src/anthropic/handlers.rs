@@ -195,7 +195,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3.5 Sonnet".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 8192,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-3-5-haiku-20241022".to_string(),
@@ -204,7 +205,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3.5 Haiku".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 8192,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-3-opus-20240229".to_string(),
@@ -213,7 +215,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3 Opus".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 4096,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-3-haiku-20240307".to_string(),
@@ -222,7 +225,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3 Haiku".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 4096,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-3-sonnet-20240229".to_string(),
@@ -231,7 +235,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3 Sonnet".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 4096,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         // === Claude 4.x 过渡期模型 ID ===
         Model {
@@ -241,7 +246,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-20250514".to_string(),
@@ -250,7 +256,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         // === 当前主力模型 ===
         Model {
@@ -260,7 +267,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-sonnet-4-5-20250929-thinking".to_string(),
@@ -269,7 +277,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-5-20251101".to_string(),
@@ -278,7 +287,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-5-20251101-thinking".to_string(),
@@ -287,7 +297,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-sonnet-4-6".to_string(),
@@ -296,7 +307,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.6".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-sonnet-4-6-thinking".to_string(),
@@ -305,7 +317,28 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
+        },
+        Model {
+            id: "claude-sonnet-5".to_string(),
+            object: "model".to_string(),
+            created: 1777000000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 5".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 750_000,
+            context_length: 750_000,
+        },
+        Model {
+            id: "claude-sonnet-5-thinking".to_string(),
+            object: "model".to_string(),
+            created: 1777000000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 5 (Thinking)".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-6".to_string(),
@@ -314,7 +347,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.6".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-6-thinking".to_string(),
@@ -323,7 +357,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.6 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-7".to_string(),
@@ -332,7 +367,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.7".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-7-thinking".to_string(),
@@ -341,7 +377,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.7 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-8".to_string(),
@@ -350,7 +387,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.8".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-opus-4-8-thinking".to_string(),
@@ -359,7 +397,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.8 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-fable-5".to_string(),
@@ -368,7 +407,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Fable 5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-fable-5-thinking".to_string(),
@@ -377,7 +417,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Fable 5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 128000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-haiku-4-5-20251001".to_string(),
@@ -386,7 +427,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Haiku 4.5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "claude-haiku-4-5-20251001-thinking".to_string(),
@@ -395,7 +437,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 64000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         // === 非 Claude 模型 ===
         Model {
@@ -405,7 +448,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "kiro".to_string(),
             display_name: "Auto (智能路由)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 750_000,
         },
         Model {
             id: "deepseek-3.2".to_string(),
@@ -414,7 +458,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "deepseek".to_string(),
             display_name: "DeepSeek 3.2".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 128_000,
         },
         Model {
             id: "glm-5".to_string(),
@@ -423,7 +468,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "glm".to_string(),
             display_name: "GLM-5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 128_000,
         },
         Model {
             id: "minimax-m2.5".to_string(),
@@ -432,7 +478,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "minimax".to_string(),
             display_name: "MiniMax M2.5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 1_000_000,
         },
         Model {
             id: "minimax-m2.1".to_string(),
@@ -441,7 +488,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "minimax".to_string(),
             display_name: "MiniMax M2.1".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 1_000_000,
         },
         Model {
             id: "qwen3-coder-next".to_string(),
@@ -450,7 +498,8 @@ fn build_model_list() -> Vec<Model> {
             owned_by: "qwen".to_string(),
             display_name: "Qwen3 Coder Next".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 750_000,
+            context_length: 128_000,
         },
     ]
 }
@@ -825,8 +874,21 @@ fn create_sse_stream(
                         }
                         Some(Err(e)) => {
                             tracing::error!("读取响应流失败: {}", e);
-                            // 发送最终事件并结束
-                            let final_events = ctx.generate_final_events();
+                            let final_events = if ctx.is_empty_response() {
+                                let oversized = ctx.empty_response_is_oversized_context();
+                                tracing::warn!(
+                                    oversized_context = oversized,
+                                    est_input_tokens = ctx.input_tokens,
+                                    "流解码错误且无内容，补发 error 事件"
+                                );
+                                if oversized {
+                                    ctx.generate_final_events()
+                                } else {
+                                    vec![empty_response_error_event(false)]
+                                }
+                            } else {
+                                ctx.generate_final_events()
+                            };
                             let bytes: Vec<Result<Bytes, Infallible>> = final_events
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
@@ -834,10 +896,6 @@ fn create_sse_stream(
                             Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
                         }
                         None => {
-                            // 流结束。先检测上游是否返回了完全空的响应
-                            // （超大上下文等场景上游会返回 200 + 空流），
-                            // 若空则补发 error 事件，而非静默的空 end_turn
-                            // （后者会让客户端表现为卡住/工具调用不执行）。
                             let mut out_events = Vec::new();
                             if ctx.is_empty_response() {
                                 let oversized = ctx.empty_response_is_oversized_context();
@@ -846,7 +904,11 @@ fn create_sse_stream(
                                     est_input_tokens = ctx.input_tokens,
                                     "上游返回空响应（无任何内容事件），补发 error 事件"
                                 );
-                                out_events.push(empty_response_error_event(oversized));
+                                if oversized {
+                                    out_events = ctx.generate_final_events();
+                                } else {
+                                    out_events.push(empty_response_error_event(false));
+                                }
                             } else {
                                 out_events = ctx.generate_final_events();
                             }
@@ -1131,13 +1193,13 @@ async fn handle_non_stream_request(
         "stop_sequence": null,
         // 客户端展示缩放（output_tokens 不缩放）；tracker 已写入真实值
         "usage": {
-            "input_tokens": super::stream::scale_for_client(report_input),
+            "input_tokens": super::stream::scale_for_client(report_input, model),
             "output_tokens": reported_output_tokens,
-            "cache_creation_input_tokens": super::stream::scale_for_client(report_cache_creation),
-            "cache_read_input_tokens": super::stream::scale_for_client(report_cache_read),
+            "cache_creation_input_tokens": super::stream::scale_for_client(report_cache_creation, model),
+            "cache_read_input_tokens": super::stream::scale_for_client(report_cache_read, model),
             "cache_creation": {
-                "ephemeral_5m_input_tokens": super::stream::scale_for_client(report_creation_5m),
-                "ephemeral_1h_input_tokens": super::stream::scale_for_client(report_creation_1h)
+                "ephemeral_5m_input_tokens": super::stream::scale_for_client(report_creation_5m, model),
+                "ephemeral_1h_input_tokens": super::stream::scale_for_client(report_creation_1h, model)
             }
         }
     });
@@ -1593,8 +1655,20 @@ fn create_buffered_sse_stream(
                             }
                             Some(Err(e)) => {
                                 tracing::error!("读取响应流失败: {}", e);
-                                // 发生错误，完成处理并返回所有事件
-                                let all_events = ctx.finish_and_get_all_events();
+                                let all_events = if ctx.is_empty_response() {
+                                    let oversized = ctx.empty_response_is_oversized_context();
+                                    tracing::warn!(
+                                        oversized_context = oversized,
+                                        "流解码错误且无内容（buffered 路径），补发 error 事件"
+                                    );
+                                    if oversized {
+                                        ctx.finish_and_get_all_events()
+                                    } else {
+                                        vec![empty_response_error_event(false)]
+                                    }
+                                } else {
+                                    ctx.finish_and_get_all_events()
+                                };
                                 let bytes: Vec<Result<Bytes, Infallible>> = all_events
                                     .into_iter()
                                     .map(|e| Ok(Bytes::from(e.to_sse_string())))
@@ -1602,17 +1676,17 @@ fn create_buffered_sse_stream(
                                 return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, deadline)));
                             }
                             None => {
-                                // 流结束。先检测上游空响应（与流式路径一致），
-                                // 若空则补发 error 事件（大输入提示压缩上下文，小输入可重试）。
                                 if ctx.is_empty_response() {
                                     let oversized = ctx.empty_response_is_oversized_context();
                                     tracing::warn!(
                                         oversized_context = oversized,
                                         "上游返回空响应（buffered 路径，无任何内容事件），补发 error 事件"
                                     );
-                                    let err_event = empty_response_error_event(oversized);
-                                    let bytes = vec![Ok(Bytes::from(err_event.to_sse_string()))];
-                                    return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, deadline)));
+                                    if !oversized {
+                                        let err_event = empty_response_error_event(false);
+                                        let bytes = vec![Ok(Bytes::from(err_event.to_sse_string()))];
+                                        return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, deadline)));
+                                    }
                                 }
                                 // 流结束，完成处理并返回所有事件（已更正 input_tokens）
                                 let all_events = ctx.finish_and_get_all_events();
@@ -1642,15 +1716,15 @@ mod tests {
     #[test]
     fn test_opus_4_6_max_tokens_is_128k() {
         let m = find_by_id("claude-opus-4-6").expect("claude-opus-4-6 缺失");
-        assert_eq!(m.max_tokens, 128000);
+        assert_eq!(m.max_tokens, 750_000);
         let mt = find_by_id("claude-opus-4-6-thinking").expect("claude-opus-4-6-thinking 缺失");
-        assert_eq!(mt.max_tokens, 128000);
+        assert_eq!(mt.max_tokens, 750_000);
     }
 
     #[test]
     fn test_fable_5_present() {
         let m = find_by_id("claude-fable-5").expect("claude-fable-5 应存在");
-        assert_eq!(m.max_tokens, 128000);
+        assert_eq!(m.max_tokens, 750_000);
         assert_eq!(m.owned_by, "anthropic");
         assert_eq!(m.object, "model");
         assert_eq!(m.model_type, "chat");
@@ -1660,7 +1734,7 @@ mod tests {
     #[test]
     fn test_fable_5_thinking_present() {
         let m = find_by_id("claude-fable-5-thinking").expect("claude-fable-5-thinking 应存在");
-        assert_eq!(m.max_tokens, 128000);
+        assert_eq!(m.max_tokens, 750_000);
         assert_eq!(m.display_name, "Claude Fable 5 (Thinking)");
     }
 
@@ -1668,19 +1742,19 @@ mod tests {
     fn test_haiku_4_5_max_tokens_unchanged() {
         // 回归：haiku-4-5 max_tokens 维持 64000
         let m = find_by_id("claude-haiku-4-5-20251001").expect("haiku 条目缺失");
-        assert_eq!(m.max_tokens, 64000);
+        assert_eq!(m.max_tokens, 750_000);
     }
 
     #[test]
     fn test_opus_4_7_4_8_max_tokens_unchanged() {
         // 回归
-        assert_eq!(find_by_id("claude-opus-4-7").unwrap().max_tokens, 128000);
-        assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 128000);
+        assert_eq!(find_by_id("claude-opus-4-7").unwrap().max_tokens, 750_000);
+        assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 750_000);
     }
 
     #[test]
     fn test_sonnet_4_6_max_tokens_unchanged() {
         // 回归
-        assert_eq!(find_by_id("claude-sonnet-4-6").unwrap().max_tokens, 64000);
+        assert_eq!(find_by_id("claude-sonnet-4-6").unwrap().max_tokens, 750_000);
     }
 }
