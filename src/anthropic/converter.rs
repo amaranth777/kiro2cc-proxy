@@ -26,7 +26,89 @@ use super::types::{ContentBlock, MessagesRequest, OutputConfig};
 /// 嵌套属性不是 object、`items` 不是 schema，以及复杂 JSON Schema 关键字都可能触发
 /// 400 "Improperly formed request"。
 fn normalize_json_schema(schema: serde_json::Value) -> serde_json::Value {
-    normalize_json_schema_inner(schema, true)
+    // 先就地展开 $ref（依赖 $defs/definitions），再规范化。
+    // Kiro 不认 $ref，未展开会让 MCP/pydantic/zod 工具的参数约束静默丢失，
+    // 该属性退化为无约束空对象。
+    let defs = extract_schema_defs(&schema);
+    // 总是运行 resolve：即便没有 $defs，也需把无法展开的 $ref（OpenAPI/外部形式）
+    // 显式降级为宽松 object，否则它们会被后续 retain 白名单清成空壳。
+    let resolved = resolve_schema_refs(schema, &defs, 0);
+    normalize_json_schema_inner(resolved, true)
+}
+
+/// 提取顶层 `$defs` / `definitions` 作为 $ref 解析表。
+fn extract_schema_defs(
+    schema: &serde_json::Value,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut defs = serde_json::Map::new();
+    if let Some(obj) = schema.as_object() {
+        for key in ["$defs", "definitions"] {
+            if let Some(serde_json::Value::Object(m)) = obj.get(key) {
+                for (k, v) in m {
+                    defs.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+    defs
+}
+
+/// 深度优先展开所有 `$ref`（仅支持 `#/$defs/<name>` 与 `#/definitions/<name>` 两种最常见形式）。
+/// `depth` 仅在 $ref 跳转时递增，超过上限视为循环引用，降级为宽松 object 兜底。
+fn resolve_schema_refs(
+    value: serde_json::Value,
+    defs: &serde_json::Map<String, serde_json::Value>,
+    depth: usize,
+) -> serde_json::Value {
+    const MAX_REF_DEPTH: usize = 16;
+    if depth > MAX_REF_DEPTH {
+        return serde_json::json!({ "type": "object", "additionalProperties": true });
+    }
+    match value {
+        serde_json::Value::Object(mut obj) => {
+            if let Some(serde_json::Value::String(ref_str)) = obj.get("$ref") {
+                let ref_str = ref_str.clone();
+                let name = ref_str
+                    .strip_prefix("#/$defs/")
+                    .or_else(|| ref_str.strip_prefix("#/definitions/"))
+                    .map(str::to_string);
+                obj.remove("$ref");
+                match name.as_ref().and_then(|n| defs.get(n)) {
+                    Some(target) => {
+                        // 展开目标后并入同级字段（不覆盖 $ref 旁已有的 description 等）。
+                        let resolved = resolve_schema_refs(target.clone(), defs, depth + 1);
+                        if let serde_json::Value::Object(robj) = resolved {
+                            for (k, v) in robj {
+                                obj.entry(k).or_insert(v);
+                            }
+                        }
+                    }
+                    None => {
+                        // 未命中：OpenAPI 风格（#/components/...）、外部 URL、或指向
+                        // 不存在的 def。无法展开，约束只能丢弃；显式标记为宽松 object
+                        // 而非留下空壳，并记日志便于排查工具参数约束丢失。
+                        tracing::debug!(
+                            "$ref 无法展开（非 #/$defs 形式或目标缺失），降级为宽松 object: {}",
+                            ref_str
+                        );
+                        obj.entry("type".to_string())
+                            .or_insert(serde_json::Value::String("object".to_string()));
+                    }
+                }
+            }
+            let mut new_obj = serde_json::Map::new();
+            for (k, v) in obj {
+                new_obj.insert(k, resolve_schema_refs(v, defs, depth));
+            }
+            serde_json::Value::Object(new_obj)
+        }
+        serde_json::Value::Array(arr) => serde_json::Value::Array(
+            arr.into_iter()
+                .map(|v| resolve_schema_refs(v, defs, depth))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 fn normalize_json_schema_inner(schema: serde_json::Value, root: bool) -> serde_json::Value {
@@ -437,14 +519,14 @@ pub fn map_model(model: &str) -> Option<String> {
         if model_lower.contains("4-6") || model_lower.contains("4.6") {
             Some("claude-sonnet-4.6".to_string())
         } else if model_lower.contains("sonnet-5")
+            || model_lower.contains("sonnet.5")
             || model_lower.contains("sonnet5")
             || model_lower.contains("sonnet-4-7")
             || model_lower.contains("sonnet-4.7")
         {
             // Kiro 后端上线的 Sonnet 5，真实 ID 为纯横线版 claude-sonnet-5
             // （点号版 claude-sonnet-5.0 无效）。thinking 走 additionalModelRequestFields。
-            // 注意锚点必须是 "sonnet-5"/"sonnet5"，不能用裸 "-5"：老 ID
-            // claude-sonnet-4-5-20250929 含子串 "-5" 会被误命中。
+            // 注意锚点必须是完整模型变体，不能用裸 "-5"，避免误命中旧模型。
             Some("claude-sonnet-5".to_string())
         } else {
             Some("claude-sonnet-4.5".to_string())
@@ -838,7 +920,7 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
         .with_current_message(current_message)
         .with_history(history);
 
-    let additional_model_request_fields = build_additional_model_request_fields(req);
+    let additional_model_request_fields = build_additional_model_request_fields(req, &model_id);
 
     Ok(ConversionResult {
         conversation_state,
@@ -1396,8 +1478,12 @@ fn convert_tools(tools: &Option<Vec<super::types::Tool>>) -> Vec<Tool> {
 }
 
 /// 根据模型返回 Kiro 允许的 max_tokens 上限
+/// claude-sonnet-5 Max Output = 64K，与 sonnet-4.x 同档，走默认分支即可
 fn model_max_output_tokens(model: &str) -> i32 {
-    if model.contains("opus-4-7") || model.contains("opus-4-8") {
+    let m = model.to_lowercase();
+    if m.contains("opus-4-7") || m.contains("opus-4.7")
+        || m.contains("opus-4-8") || m.contains("opus-4.8")
+    {
         128000
     } else {
         64000
@@ -1405,11 +1491,13 @@ fn model_max_output_tokens(model: &str) -> i32 {
 }
 
 /// 构建 additionalModelRequestFields（thinking、output_config、max_tokens）
-fn build_additional_model_request_fields(req: &MessagesRequest) -> Option<serde_json::Value> {
-    // Kiro 后端仅 Claude 系列模型支持 additionalModelRequestFields。
-    // 非 Claude 模型（glm-5/deepseek/qwen/minimax 等）附带该字段会被后端
-    // 以 400 "additionalModelRequestFields is not supported for this model" 拒绝。
-    if !req.model.to_lowercase().starts_with("claude") {
+///
+/// Kiro 不接受非 Claude 模型或 4.5 代际模型的 additionalModelRequestFields。
+fn build_additional_model_request_fields(
+    req: &MessagesRequest,
+    model_id: &str,
+) -> Option<serde_json::Value> {
+    if !req.model.to_lowercase().starts_with("claude") || model_id.ends_with("4.5") {
         return None;
     }
 
@@ -1989,6 +2077,82 @@ mod tests {
             serde_json::json!(["fast", "safe"])
         );
         assert!(normalized.get("$schema").is_none());
+    }
+
+    #[test]
+    fn test_normalize_resolves_ref_from_defs() {
+        // MCP/pydantic 风格：属性用 $ref 指向 $defs 中的子 schema。
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "filter": { "$ref": "#/$defs/Filter" }
+            },
+            "required": ["filter"],
+            "$defs": {
+                "Filter": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "limit": { "type": "integer" }
+                    },
+                    "required": ["name"]
+                }
+            }
+        });
+
+        let normalized = normalize_json_schema(schema);
+
+        // $ref 应被展开为实际子 schema，而非退化为空对象
+        let filter = &normalized["properties"]["filter"];
+        assert_eq!(filter["type"], "object");
+        assert_eq!(filter["properties"]["name"]["type"], "string");
+        assert_eq!(filter["properties"]["limit"]["type"], "integer");
+        assert_eq!(filter["required"], serde_json::json!(["name"]));
+        // $defs 与 $ref 不应残留（Kiro 不认）
+        assert!(normalized.get("$defs").is_none());
+        assert!(filter.get("$ref").is_none());
+    }
+
+    #[test]
+    fn test_normalize_ref_cycle_does_not_panic() {
+        // 自引用循环：展开应在深度上限处兜底，不栈溢出。
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "node": { "$ref": "#/$defs/Node" }
+            },
+            "$defs": {
+                "Node": {
+                    "type": "object",
+                    "properties": {
+                        "child": { "$ref": "#/$defs/Node" }
+                    }
+                }
+            }
+        });
+
+        let normalized = normalize_json_schema(schema);
+        assert_eq!(normalized["properties"]["node"]["type"], "object");
+        assert!(normalized.get("$defs").is_none());
+    }
+
+    #[test]
+    fn test_normalize_unresolvable_ref_degrades_to_object() {
+        // OpenAPI 风格 / 外部 / 不存在的 $ref：无法展开，应降级为宽松 object，
+        // 不留下悬空 $ref。
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "a": { "$ref": "#/components/schemas/Foo" },
+                "b": { "$ref": "#/$defs/Missing" }
+            }
+        });
+
+        let normalized = normalize_json_schema(schema);
+        assert_eq!(normalized["properties"]["a"]["type"], "object");
+        assert_eq!(normalized["properties"]["b"]["type"], "object");
+        assert!(normalized["properties"]["a"].get("$ref").is_none());
+        assert!(normalized["properties"]["b"].get("$ref").is_none());
     }
 
     #[test]

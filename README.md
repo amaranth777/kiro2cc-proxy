@@ -1,8 +1,11 @@
 # kiro2cc-proxy
 
+[![Tests](https://github.com/TsinHzl/kiro2cc-proxy/actions/workflows/test.yaml/badge.svg)](https://github.com/TsinHzl/kiro2cc-proxy/actions/workflows/test.yaml)
+[![codecov](https://codecov.io/gh/TsinHzl/kiro2cc-proxy/graph/badge.svg)](https://codecov.io/gh/TsinHzl/kiro2cc-proxy)
+
 一个用 Rust 编写的 Anthropic Claude API 兼容代理服务，将 Anthropic API 请求转换为 Kiro API 请求。
 
-> **✅ 支持模型：Claude Sonnet 4.5 / Claude Sonnet 4.6 / Claude Opus 4.5 / Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8 / Claude Haiku 4.5 / DeepSeek 3.2 / GLM-5 / MiniMax M2.1 / MiniMax M2.5 / Qwen3-Coder**
+> **✅ 支持模型：Claude Sonnet 5 / Claude Sonnet 4.5 / Claude Sonnet 4.6 / Claude Opus 4.5 / Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8 / Claude Haiku 4.5 / DeepSeek 3.2 / GLM-5 / MiniMax M2.1 / MiniMax M2.5 / Qwen3-Coder**
 
 [English](README.en.md) | 中文
 
@@ -409,18 +412,11 @@ bash start_server.sh restart   # 重启
 4. 将导出的 JSON 内容**直接粘贴**到输入框，或将 JSON 文件**拖拽**到页面上
 5. 管理面板自动识别账号信息并显示，确认后保存即可
 
-> ⚠️ **【重要】通过 HTTP 访问管理面板时导入账号会失败**
+> ℹ️ **HTTP 访问管理面板导入账号**
 >
-> 如果你通过 `http://服务器IP:端口/admin`（非 HTTPS、非 localhost）访问管理面板，浏览器会因安全策略禁用 `crypto.subtle` 加密 API，导致导入时报错 `Cannot read properties of undefined (reading 'digest')`，且后端不会有任何错误日志。
+> v2.7.3 起已内置纯 JS 降级实现，通过 `http://服务器IP:端口/admin`（非 HTTPS、非 localhost）访问管理面板也可正常导入账号，无需再配置 HTTPS 或浏览器 flags。
 >
-> **解决方案一（推荐）：为服务器绑定域名并配置 HTTPS**，通过 `https://` 访问管理面板即可正常导入。
->
-> **解决方案二（临时绕过）：强制浏览器信任该 HTTP 地址**
->
-> Chrome 用户在地址栏打开：`chrome://flags/#unsafely-treat-insecure-origin-as-secure`
-> Edge 用户在地址栏打开：`edge://flags/#unsafely-treat-insecure-origin-as-secure`
->
-> 在 "Insecure origins treated as secure" 下方的文本框中填入你的完整地址（如 `http://43.153.11.66:8990`），将右侧开关改为 **Enabled**，点击 **Relaunch** 重启浏览器后重试。
+> 若你使用的是 v2.7.2 及更早版本，仍会因浏览器安全策略禁用 `crypto.subtle` 而报错 `Cannot read properties of undefined (reading 'digest')`，请升级到最新版本。
 
 **第四步（可选）：手动创建账号文件**
 
@@ -647,11 +643,13 @@ Authorization: Bearer your-api-key
 | 请求模型名（含关键词） | 实际使用的 Kiro 模型 |
 |----------------------|-------------------|
 | `*sonnet*`（含 4.6/4-6） | `claude-sonnet-4.6` |
+| `*sonnet*`（含 5/sonnet-5） | `claude-sonnet-5` |
 | `*sonnet*`（其他） | `claude-sonnet-4.5` |
 | `*opus*`（含 4.5/4-5） | `claude-opus-4.5` |
 | `*opus*`（含 4.7/4-7） | `claude-opus-4.7` |
 | `*opus*`（含 4.8/4-8） | `claude-opus-4.8` |
 | `*opus*`（其他） | `claude-opus-4.6` |
+| `*fable*` | `claude-fable-5` |
 | `*haiku*` | `claude-haiku-4.5` |
 | `*deepseek*` | `deepseek-3.2` |
 | `*glm*` | `glm-5` |
@@ -704,11 +702,15 @@ Authorization: Bearer your-api-key
 
 **Q：通过管理面板导入账号时报错 `Cannot read properties of undefined (reading 'digest')`**
 
-这是浏览器的安全策略限制，`crypto.subtle` 加密 API 只在 HTTPS 或 localhost 环境下可用。通过公网 IP + HTTP 访问管理面板时会触发此错误，后端不会有任何日志。
+此问题已在 v2.7.3 修复：`crypto.subtle` 加密 API 只在 HTTPS 或 localhost 环境下可用，公网 IP + HTTP 访问会触发此错误，v2.7.3 起自动降级为纯 JS 实现，无需再配置 HTTPS。若仍报错，请升级到最新版本。
 
-解决方案：
-- **推荐**：为服务器绑定域名并配置 HTTPS，通过 `https://` 访问管理面板
-- **临时绕过**：Chrome 打开 `chrome://flags/#unsafely-treat-insecure-origin-as-secure`，Edge 打开 `edge://flags/#unsafely-treat-insecure-origin-as-secure`，在文本框填入完整地址（如 `http://43.153.11.66:8990`），改为 Enabled 后重启浏览器
+**Q：企业版 IdC 账号请求返回 502，日志显示 `profileArn is required for this request`**
+
+企业版（Enterprise）IdC 账号调用 Q 端点强制要求 `profileArn`，但 IdC Token 刷新接口不会返回该字段，需要手动填写。管理面板「添加账号 / 编辑账号」对话框中已提供 **Profile ARN** 输入框，填入形如 `arn:aws:codewhisperer:<region>:<account-id>:profile/<profile-id>` 的值即可。`profileArn` 可从 Kiro IDE 本地缓存或 `ListAvailableProfiles` 获取，其所在 region 需与账号的 `apiRegion` 保持一致。Social 账号一般无需填写。
+
+**Q：子 API Key 消费额度能按真实 Kiro credits 计量吗（而不是估算的美元）**
+
+能。创建/编辑子 API Key 时，额度单位可选「美元估算」或「真实 Credits」（limitUnit：usd/credits）。选择 credits 时，额度按 usage 记录中的真实 credits_used 累加计量（旧记录无 credits_used 字段时按 estimated_cost × k_ref 回退估算）。默认为 usd，向后兼容现有配置。
 
 **Q：端口被占用**
 

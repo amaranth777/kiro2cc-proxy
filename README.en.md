@@ -1,8 +1,11 @@
 # kiro2cc-proxy
 
+[![Tests](https://github.com/TsinHzl/kiro2cc-proxy/actions/workflows/test.yaml/badge.svg)](https://github.com/TsinHzl/kiro2cc-proxy/actions/workflows/test.yaml)
+[![codecov](https://codecov.io/gh/TsinHzl/kiro2cc-proxy/graph/badge.svg)](https://codecov.io/gh/TsinHzl/kiro2cc-proxy)
+
 A Rust-based Anthropic Claude API-compatible proxy that converts Anthropic API requests into Kiro API requests.
 
-> **✅ Supported Models: Claude Sonnet 4.5 / Claude Sonnet 4.6 / Claude Opus 4.5 / Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8 / Claude Haiku 4.5 / DeepSeek 3.2 / GLM-5 / MiniMax M2.1 / MiniMax M2.5 / Qwen3-Coder**
+> **✅ Supported Models: Claude Sonnet 5 / Claude Sonnet 4.5 / Claude Sonnet 4.6 / Claude Opus 4.5 / Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8 / Claude Haiku 4.5 / DeepSeek 3.2 / GLM-5 / MiniMax M2.1 / MiniMax M2.5 / Qwen3-Coder**
 
 [中文](README.md) | English
 
@@ -405,18 +408,11 @@ Follow the [Local Deployment](#local-deployment-macos) or [Server Deployment](#s
 4. **Paste** the exported JSON content into the input field, or **drag and drop** the JSON file onto the page
 5. The panel automatically recognizes the account info and displays it — confirm to save
 
-> ⚠️ **[CRITICAL] Importing accounts fails when accessing the admin panel over HTTP**
+> ℹ️ **Importing accounts over HTTP**
 >
-> If you access the admin panel via `http://server-ip:port/admin` (not HTTPS, not localhost), the browser's security policy disables the `crypto.subtle` encryption API, causing an error `Cannot read properties of undefined (reading 'digest')` during import. The backend will show no error logs.
+> Since v2.7.3, a pure-JS fallback is built in, so importing accounts works fine even when accessing the admin panel via `http://server-ip:port/admin` (not HTTPS, not localhost) — no need to configure HTTPS or browser flags.
 >
-> **Solution 1 (recommended):** Bind a domain name to your server and configure HTTPS, then access the admin panel via `https://`.
->
-> **Solution 2 (temporary workaround):** Force the browser to treat the HTTP address as secure.
->
-> Chrome: open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
-> Edge: open `edge://flags/#unsafely-treat-insecure-origin-as-secure`
->
-> Enter your full address (e.g. `http://43.153.11.66:8990`) in the text box under "Insecure origins treated as secure", set the toggle to **Enabled**, then click **Relaunch** to restart the browser and retry.
+> If you're on v2.7.2 or earlier, the browser's security policy still disables the `crypto.subtle` encryption API in this case, causing an error `Cannot read properties of undefined (reading 'digest')`. Please upgrade to the latest version.
 
 **Step 4 (optional): Create the accounts file manually**
 
@@ -643,11 +639,13 @@ Any model name containing the following keywords is automatically mapped to the 
 | Request model name (keyword) | Kiro model used |
 |------------------------------|----------------|
 | `*sonnet*` (including 4.6/4-6) | `claude-sonnet-4.6` |
+| `*sonnet*` (including 5/sonnet-5) | `claude-sonnet-5` |
 | `*sonnet*` (others) | `claude-sonnet-4.5` |
 | `*opus*` (including 4.5/4-5) | `claude-opus-4.5` |
 | `*opus*` (including 4.7/4-7) | `claude-opus-4.7` |
 | `*opus*` (including 4.8/4-8) | `claude-opus-4.8` |
 | `*opus*` (others) | `claude-opus-4.6` |
+| `*fable*` | `claude-fable-5` |
 | `*haiku*` | `claude-haiku-4.5` |
 | `*deepseek*` | `deepseek-3.2` |
 | `*glm*` | `glm-5` |
@@ -700,11 +698,15 @@ Try changing `tlsBackend` to `native-tls` in `config.json` and restart the servi
 
 **Q: Importing accounts via the admin panel fails with `Cannot read properties of undefined (reading 'digest')`**
 
-This is a browser security policy restriction. The `crypto.subtle` encryption API is only available in HTTPS or localhost environments. Accessing the admin panel via a public IP + HTTP triggers this error — the backend will show no logs.
+This was fixed in v2.7.3: the `crypto.subtle` encryption API is only available in HTTPS or localhost environments, so accessing the admin panel via a public IP + HTTP used to trigger this error. Since v2.7.3, it automatically falls back to a pure-JS implementation — no need to configure HTTPS. If you still see this error, please upgrade to the latest version.
 
-Solutions:
-- **Recommended:** Bind a domain name to your server and configure HTTPS, then access via `https://`
-- **Temporary workaround:** Chrome: open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`; Edge: open `edge://flags/#unsafely-treat-insecure-origin-as-secure`. Enter your full address (e.g. `http://43.153.11.66:8990`) in the text box, set to **Enabled**, click **Relaunch**
+**Q: Enterprise IdC account requests return 502 with `profileArn is required for this request` in the logs**
+
+Enterprise IdC accounts calling the Q endpoint require a `profileArn`, but the IdC token refresh response doesn't include it — it must be entered manually. The admin panel's "Add Account / Edit Account" dialog now has a **Profile ARN** field; fill in a value like `arn:aws:codewhisperer:<region>:<account-id>:profile/<profile-id>`. You can obtain the `profileArn` from the Kiro IDE local cache or via `ListAvailableProfiles`; its region must match the account's `apiRegion`. Social accounts usually don't need this field.
+
+**Q: Can sub-API-Key spending limits be metered in real Kiro credits instead of estimated USD?**
+
+Yes. When creating/editing a sub API Key, the limit unit can be set to "USD estimate" or "real credits" (`limitUnit`: usd/credits). With credits, the limit is checked against the real `credits_used` accumulated in usage records (falls back to `estimated_cost × k_ref` for older records without `credits_used`). Defaults to `usd`, fully backward compatible.
 
 **Q: Port already in use**
 

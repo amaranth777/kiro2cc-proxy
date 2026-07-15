@@ -8,8 +8,8 @@ cd "$SCRIPT_DIR"
 # ============================================================
 # 可选：本地覆盖配置（取消注释并修改）
 # ============================================================
-# export API_KEY=sk-kiro2cc-proxy-your-key
-# export ADMIN_API_KEY=sk-admin-your-key
+# export API_KEY=<LOCAL_API_KEY>
+# export ADMIN_API_KEY=<LOCAL_ADMIN_API_KEY>
 # export PORT=5678
 # export HOST=127.0.0.1
 # export REGION=us-east-1
