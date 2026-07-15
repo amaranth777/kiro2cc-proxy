@@ -477,6 +477,22 @@ pub fn map_model(model: &str) -> Option<String> {
         }
     } else if model_lower.contains("qwen") {
         Some("qwen3-coder-next".to_string())
+    } else if model_lower.contains("gpt-5.6")
+        || model_lower.contains("gpt5.6")
+        || model_lower.contains("gpt-5-6")
+    {
+        // Kiro 后端 2026-07 上线的 GPT-5.6 实验预览三档（272k context）：
+        // sol/terra/luna 是独立档位而非版本迭代，无默认档可兜底，必须精确匹配
+        // 完整名称，否则返回 None（与其它未知模型一致，交给上层报 400）。
+        if model_lower.contains("sol") {
+            Some("gpt-5.6-sol".to_string())
+        } else if model_lower.contains("terra") {
+            Some("gpt-5.6-terra".to_string())
+        } else if model_lower.contains("luna") {
+            Some("gpt-5.6-luna".to_string())
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -1868,6 +1884,46 @@ mod tests {
     #[test]
     fn test_map_model_unsupported() {
         assert!(map_model("gpt-4").is_none());
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_sol() {
+        assert_eq!(map_model("gpt-5.6-sol"), Some("gpt-5.6-sol".to_string()));
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_terra() {
+        assert_eq!(
+            map_model("gpt-5.6-terra"),
+            Some("gpt-5.6-terra".to_string())
+        );
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_luna() {
+        assert_eq!(map_model("gpt-5.6-luna"), Some("gpt-5.6-luna".to_string()));
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_case_insensitive() {
+        assert_eq!(map_model("GPT-5.6-SOL"), Some("gpt-5.6-sol".to_string()));
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_without_dot() {
+        // 兼容客户端可能传 gpt5.6-terra（无横线）或 gpt-5-6-terra（点号变横线）
+        assert_eq!(map_model("gpt5.6-terra"), Some("gpt-5.6-terra".to_string()));
+        assert_eq!(
+            map_model("gpt-5-6-terra"),
+            Some("gpt-5.6-terra".to_string())
+        );
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6_unknown_variant_is_unsupported() {
+        // sol/terra/luna 是互不兼容的独立档位，无默认档可兜底，
+        // 未知变体（如打错字）必须返回 None，不能悄悄猜测映射到某一档
+        assert!(map_model("gpt-5.6-mars").is_none());
     }
 
     #[test]
