@@ -5,6 +5,7 @@
 //! slow or unavailable CLI cannot block every `/v1/models` request.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -95,7 +96,7 @@ fn discover_models_with_ttl(ttl: Duration) -> Option<Vec<UpstreamModel>> {
 }
 
 fn run_discovery_command() -> Option<Vec<u8>> {
-    let mut child = Command::new("kiro-cli")
+    let mut child = Command::new(kiro_cli_path())
         .args(["chat", "--list-models", "--format", "json"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -122,6 +123,25 @@ fn run_discovery_command() -> Option<Vec<u8>> {
             }
         }
     }
+}
+
+fn kiro_cli_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("KIRO_CLI_PATH").filter(|value| !value.is_empty()) {
+        return PathBuf::from(path);
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        for path in [
+            PathBuf::from(&home).join(".local/bin/kiro-cli"),
+            PathBuf::from(&home).join(".kiro/bin/kiro-cli"),
+        ] {
+            if path.is_file() {
+                return path;
+            }
+        }
+    }
+
+    PathBuf::from("kiro-cli")
 }
 
 fn parse_models(bytes: &[u8]) -> Result<Vec<UpstreamModel>, serde_json::Error> {
