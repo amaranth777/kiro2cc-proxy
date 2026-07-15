@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Harllan He. Licensed under MIT.
 //! Anthropic API 类型定义
 
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use std::collections::HashMap;
 
 // === 错误响应 ===
@@ -40,17 +40,49 @@ impl ErrorResponse {
 // === Models 端点类型 ===
 
 /// 模型信息
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct Model {
     pub id: String,
     pub object: String,
     pub created: i64,
     pub owned_by: String,
     pub display_name: String,
-    #[serde(rename = "type")]
     pub model_type: String,
     pub max_tokens: i32,
     pub context_length: i32,
+}
+
+impl Serialize for Model {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let upstream = super::model_catalog::metadata_for_id(&self.id);
+        let compatibility = upstream.is_none();
+        let thinking = compatibility && self.id.starts_with("claude-");
+        let mut state = serializer.serialize_struct("Model", 13)?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("object", &self.object)?;
+        state.serialize_field("created", &self.created)?;
+        state.serialize_field("owned_by", &self.owned_by)?;
+        state.serialize_field("display_name", &self.display_name)?;
+        state.serialize_field("type", &self.model_type)?;
+        state.serialize_field("max_tokens", &self.max_tokens)?;
+        state.serialize_field(
+            "context_length",
+            &upstream
+                .as_ref()
+                .map_or(self.context_length, |m| m.context_length),
+        )?;
+        if let Some(metadata) = upstream.as_ref() {
+            state.serialize_field("description", &metadata.description)?;
+            state.serialize_field("rate_multiplier", &metadata.rate_multiplier)?;
+        }
+        state.serialize_field("capabilities", &serde_json::json!({"thinking": thinking}))?;
+        state.serialize_field("discovered", &upstream.is_some())?;
+        state.serialize_field("compatibility", &compatibility)?;
+        state.end()
+    }
 }
 
 /// 模型列表响应

@@ -185,7 +185,7 @@ pub async fn get_models() -> impl IntoResponse {
 
 /// 构建可用模型列表（供 get_models 和 get_model 共用）
 fn build_model_list() -> Vec<Model> {
-    vec![
+    let mut models = vec![
         // === 旧版模型 ID（兼容旧版 Claude Code 客户端） ===
         // 这些旧 ID 在 map_model() 中会被正确映射到对应的 Kiro 模型
         Model {
@@ -501,7 +501,27 @@ fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 128_000,
         },
-    ]
+    ];
+
+    if let Some(discovered) = super::model_catalog::discover_models() {
+        models.retain(|model| model.id.starts_with("claude-") || model.id == "auto");
+        for upstream in discovered {
+            if models.iter().any(|model| model.id == upstream.id) {
+                continue;
+            }
+            models.push(Model {
+                id: upstream.id.clone(),
+                object: "model".to_string(),
+                created: 0,
+                owned_by: "kiro".to_string(),
+                display_name: upstream.id,
+                model_type: "chat".to_string(),
+                max_tokens: upstream.context_length,
+                context_length: upstream.context_length,
+            });
+        }
+    }
+    models
 }
 
 /// GET /v1/models/:model_id

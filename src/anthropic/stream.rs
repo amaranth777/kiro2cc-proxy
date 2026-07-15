@@ -545,8 +545,8 @@ impl SseStateManager {
 /// 历史上按模型分支返回 200K/1M；本变更改为统一 1M，与"contextUsage 本地化"决策一致：
 /// final_input_tokens 不再依赖 Kiro `contextUsageEvent` 反算；如需差异化窗口
 /// 可恢复 match 分支。
-pub(crate) fn context_window_for_model(_model: &str) -> i32 {
-    750_000
+pub(crate) fn context_window_for_model(model: &str) -> i32 {
+    super::model_catalog::context_length_for_model(model)
 }
 
 /// 空响应判定为「上下文过大」的输入 token 阈值（取窗口的 28%）。

@@ -26,6 +26,7 @@
 mod converter;
 mod handlers;
 pub mod middleware;
+mod model_catalog;
 mod router;
 mod stream;
 pub mod types;
