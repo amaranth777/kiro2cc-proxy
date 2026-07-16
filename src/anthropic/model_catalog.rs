@@ -12,7 +12,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const DEFAULT_TTL: Duration = Duration::from_secs(300);
-const CLI_TIMEOUT: Duration = Duration::from_secs(5);
+// ponytail: bounded external discovery; 15s covers the real kiro-cli startup latency without allowing a hung child to block requests indefinitely.
+const CLI_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UpstreamModel {
