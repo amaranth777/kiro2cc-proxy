@@ -5,7 +5,7 @@
 
 一个用 Rust 编写的 Anthropic Claude API 兼容代理服务，将 Anthropic API 请求转换为 Kiro API 请求。
 
-> **✅ 支持模型：Claude Sonnet 5 / Claude Sonnet 4.5 / Claude Sonnet 4.6 / Claude Opus 4.5 / Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8 / Claude Haiku 4.5 / DeepSeek 3.2 / GLM-5 / MiniMax M2.1 / MiniMax M2.5 / Qwen3-Coder**
+> **✅ 支持模型：Claude Sonnet 5 / Claude Sonnet 4.5 / Claude Sonnet 4.6 / Claude Opus 4.5 / Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8 / Claude Haiku 4.5 / DeepSeek 3.2 / GLM-5 / MiniMax M2.1 / MiniMax M2.5 / Qwen3-Coder / GPT-5.6 Sol / GPT-5.6 Terra / GPT-5.6 Luna**
 
 [English](README.en.md) | 中文
 
@@ -656,6 +656,9 @@ Authorization: Bearer your-api-key
 | `*minimax*`（含 2.5/2-5） | `minimax-m2.5` |
 | `*minimax*`（其他） | `minimax-m2.1` |
 | `*qwen*` | `qwen3-coder-next` |
+| `*gpt*`（含 terra） | `gpt-5.6-terra` |
+| `*gpt*`（含 luna） | `gpt-5.6-luna` |
+| `*gpt*`（含 sol，或含 5.6/5-6 但无具体变体名，默认落到旗舰档） | `gpt-5.6-sol` |
 
 ---
 
@@ -691,6 +694,10 @@ Authorization: Bearer your-api-key
 **Q：请求返回 `INVALID_MODEL_ID`**
 
 > ⚠️ **【重要】** 国内 IP 无法直接访问 Claude 模型。必须在 `app/config/config.json` 中配置 `proxyUrl`（如 `"proxyUrl": "http://127.0.0.1:7890"`），或使用境外服务器。这是国内用户最常见的问题。
+
+**Q：使用 GPT-5.6 系列模型（sol/terra/luna）时，thinking 模式、output effort 或 max_tokens 设定似乎没有生效**
+
+GPT-5.6 系列的 Kiro 后端 schema 不支持 `additionalModelRequestFields`（涵盖 thinking / output_config effort / max_tokens 三个子字段），与 Claude 4.5 代际（Sonnet 4.5 / Opus 4.5 / Haiku 4.5）一样会被整体跳过，属已知限制，非本项目 bug。
 
 **Q：请求返回 401 Unauthorized**
 

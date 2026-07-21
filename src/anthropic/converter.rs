@@ -1497,7 +1497,10 @@ fn build_additional_model_request_fields(
     req: &MessagesRequest,
     model_id: &str,
 ) -> Option<serde_json::Value> {
-    if !req.model.to_lowercase().starts_with("claude") || model_id.ends_with("4.5") {
+    if !req.model.to_lowercase().starts_with("claude")
+        || model_id.ends_with("4.5")
+        || model_id.starts_with("gpt-")
+    {
         return None;
     }
 
@@ -3244,6 +3247,35 @@ mod tests {
         assert_eq!(
             map_model("claude-opus-4-6"),
             Some("claude-opus-4.6".to_string())
+        );
+    }
+
+    #[test]
+    fn test_gpt_5_6_additional_model_request_fields_is_none() {
+        // 实测：gpt-5.6-* 的 additionalModelRequestFields schema 既不认识 max_tokens
+        // 也不认识 output_config（均返回 400 REQUEST_BODY_INVALID），需整体跳过该字段。
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = MessagesRequest {
+            model: "gpt-5.6-sol".to_string(),
+            max_tokens: 128000,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Hello"),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let result = convert_request(&req).unwrap();
+        assert!(
+            result.additional_model_request_fields.is_none(),
+            "gpt-5.6 系列必须整体省略 additionalModelRequestFields 字段"
         );
     }
 }

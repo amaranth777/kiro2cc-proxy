@@ -159,6 +159,23 @@ export interface ModelUsage {
   cost: number
 }
 
+// 支持的模型条目（字段名与后端 Model 结构体保持一致，非 camelCase）
+export interface ModelItem {
+  id: string
+  object: string
+  created: number
+  owned_by: string
+  display_name: string
+  type: string
+  max_tokens: number
+  rate_multiplier?: number | null
+}
+
+export interface ModelsResponse {
+  object: string
+  data: ModelItem[]
+}
+
 // RPM 实时监控
 export interface RpmSnapshot {
   global: number

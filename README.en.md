@@ -5,7 +5,7 @@
 
 A Rust-based Anthropic Claude API-compatible proxy that converts Anthropic API requests into Kiro API requests.
 
-> **✅ Supported Models: Claude Sonnet 5 / Claude Sonnet 4.5 / Claude Sonnet 4.6 / Claude Opus 4.5 / Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8 / Claude Haiku 4.5 / DeepSeek 3.2 / GLM-5 / MiniMax M2.1 / MiniMax M2.5 / Qwen3-Coder**
+> **✅ Supported Models: Claude Sonnet 5 / Claude Sonnet 4.5 / Claude Sonnet 4.6 / Claude Opus 4.5 / Claude Opus 4.6 / Claude Opus 4.7 / Claude Opus 4.8 / Claude Haiku 4.5 / DeepSeek 3.2 / GLM-5 / MiniMax M2.1 / MiniMax M2.5 / Qwen3-Coder / GPT-5.6 Sol / GPT-5.6 Terra / GPT-5.6 Luna**
 
 [中文](README.md) | English
 
@@ -652,6 +652,9 @@ Any model name containing the following keywords is automatically mapped to the 
 | `*minimax*` (including 2.5/2-5) | `minimax-m2.5` |
 | `*minimax*` (others) | `minimax-m2.1` |
 | `*qwen*` | `qwen3-coder-next` |
+| `*gpt*` (including terra) | `gpt-5.6-terra` |
+| `*gpt*` (including luna) | `gpt-5.6-luna` |
+| `*gpt*` (including sol, or 5.6/5-6 without a variant name, defaults to the flagship tier) | `gpt-5.6-sol` |
 
 ---
 
@@ -687,6 +690,10 @@ Create `app/config/credentials.json` (local) or `data/credentials.json` (Docker)
 **Q: Requests return `INVALID_MODEL_ID`**
 
 > ⚠️ **[CRITICAL]** Mainland China IPs cannot access Claude models directly. You must add `proxyUrl` to `app/config/config.json` (e.g. `"proxyUrl": "http://127.0.0.1:7890"`), or use an overseas server. This is the most common issue for users in China.
+
+**Q: When using GPT-5.6 models (sol/terra/luna), thinking mode / output effort / max_tokens settings seem to have no effect**
+
+The Kiro backend schema for the GPT-5.6 series does not support `additionalModelRequestFields` (covering the thinking / output_config effort / max_tokens sub-fields) — same as the Claude 4.5 generation (Sonnet 4.5 / Opus 4.5 / Haiku 4.5), this field is skipped entirely. This is a known upstream limitation, not a bug in this project.
 
 **Q: Requests return 401 Unauthorized**
 

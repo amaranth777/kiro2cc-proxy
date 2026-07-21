@@ -11,7 +11,10 @@ use serde::Serialize;
 
 use super::{
     middleware::AdminState,
-    types::{AdminErrorResponse, CreateApiKeyRequest, SuccessResponse, UpdateApiKeyRequest},
+    types::{
+        AdminErrorResponse, AdminModelsResponse, CreateApiKeyRequest, SuccessResponse,
+        UpdateApiKeyRequest,
+    },
 };
 
 /// GET /api/admin/server-info
@@ -229,6 +232,16 @@ pub async fn get_credential_today_summary(
     Json(tracker.get_today_summary_for_credential(id)).into_response()
 }
 
+/// GET /api/admin/models
+/// 获取当前代理支持的完整模型列表（admin 鉴权），直接来源于上游 ListAvailableModels
+/// 实时响应；上游调用失败时回退到本地静态模型表
+pub async fn get_admin_models(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(AdminModelsResponse {
+        object: "list".to_string(),
+        data: state.service.list_admin_models().await,
+    })
+}
+
 /// GET /api/admin/rpm
 /// 获取实时 RPM 数据（含 sticky cache 命中/未命中统计）
 pub async fn get_rpm(State(state): State<AdminState>) -> impl IntoResponse {
@@ -330,4 +343,67 @@ pub async fn get_throttle_logs(
         .unwrap_or(50)
         .min(500);
     Json(store.get_paged(id, page, page_size)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use parking_lot::RwLock;
+
+    use super::*;
+    use crate::admin::{middleware::AdminState, service::AdminService};
+    use crate::anthropic::handlers::build_model_list;
+    use crate::kiro::token_manager::MultiTokenManager;
+    use crate::model::config::Config;
+
+    fn empty_admin_state() -> AdminState {
+        let token_manager =
+            MultiTokenManager::new(Config::default(), vec![], None, None, false).unwrap();
+        let service = AdminService::new(Arc::new(token_manager));
+        AdminState::new(Arc::new(RwLock::new("test-admin-key".to_string())), service)
+    }
+
+    #[tokio::test]
+    async fn test_get_admin_models_matches_build_model_list() {
+        let response = get_admin_models(State(empty_admin_state()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("读取响应体失败");
+        let parsed: AdminModelsResponse = serde_json::from_slice(&body).expect("解析响应体失败");
+
+        assert_eq!(parsed.object, "list");
+
+        let expected_ids: std::collections::HashSet<String> =
+            build_model_list().into_iter().map(|m| m.id).collect();
+        let actual_ids: std::collections::HashSet<String> = parsed
+            .data
+            .iter()
+            .map(|item| item.model.id.clone())
+            .collect();
+        assert_eq!(actual_ids, expected_ids);
+
+        for id in [
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "claude-fable-5",
+            "claude-sonnet-5",
+        ] {
+            assert!(actual_ids.contains(id), "模型列表应包含 {id}");
+        }
+
+        // 零账号场景下 list_available_models 必然失败，触发回退到本地静态模型表
+        assert!(
+            parsed
+                .data
+                .iter()
+                .all(|item| item.rate_multiplier.is_none()),
+            "无可用账号时所有模型的 rate_multiplier 应为 None"
+        );
+    }
 }

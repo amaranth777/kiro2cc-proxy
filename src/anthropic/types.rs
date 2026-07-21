@@ -41,12 +41,14 @@ impl ErrorResponse {
 
 /// 模型信息
 #[derive(Debug)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 pub struct Model {
     pub id: String,
     pub object: String,
     pub created: i64,
     pub owned_by: String,
     pub display_name: String,
+    #[cfg_attr(test, serde(rename = "model_type", alias = "type"))]
     pub model_type: String,
     pub max_tokens: i32,
     pub context_length: i32,
@@ -76,7 +78,6 @@ impl Serialize for Model {
         )?;
         if let Some(metadata) = upstream.as_ref() {
             state.serialize_field("description", &metadata.description)?;
-            state.serialize_field("rate_multiplier", &metadata.rate_multiplier)?;
         }
         state.serialize_field("capabilities", &serde_json::json!({"thinking": thinking}))?;
         state.serialize_field("discovered", &upstream.is_some())?;
@@ -87,6 +88,7 @@ impl Serialize for Model {
 
 /// 模型列表响应
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 pub struct ModelsResponse {
     pub object: String,
     pub data: Vec<Model>,

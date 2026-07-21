@@ -184,7 +184,7 @@ pub async fn get_models() -> impl IntoResponse {
 }
 
 /// 构建可用模型列表（供 get_models 和 get_model 共用）
-fn build_model_list() -> Vec<Model> {
+pub(crate) fn build_model_list() -> Vec<Model> {
     let mut models = vec![
         // === 旧版模型 ID（兼容旧版 Claude Code 客户端） ===
         // 这些旧 ID 在 map_model() 中会被正确映射到对应的 Kiro 模型
@@ -521,10 +521,44 @@ fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 128_000,
         },
+        Model {
+            id: "gpt-5.6-sol".to_string(),
+            object: "model".to_string(),
+            created: 1770314400,
+            owned_by: "openai".to_string(),
+            display_name: "GPT-5.6 Sol".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: 272000,
+        },
+        Model {
+            id: "gpt-5.6-terra".to_string(),
+            object: "model".to_string(),
+            created: 1770314400,
+            owned_by: "openai".to_string(),
+            display_name: "GPT-5.6 Terra".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: 272000,
+        },
+        Model {
+            id: "gpt-5.6-luna".to_string(),
+            object: "model".to_string(),
+            created: 1770314400,
+            owned_by: "openai".to_string(),
+            display_name: "GPT-5.6 Luna".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: 272000,
+        },
     ];
 
     if let Some(discovered) = super::model_catalog::discover_models() {
-        models.retain(|model| model.id.starts_with("claude-") || model.id == "auto");
+        models.retain(|model| {
+            model.id.starts_with("claude-")
+                || model.id.starts_with("gpt-5.6-")
+                || model.id == "auto"
+        });
         for upstream in discovered {
             if models.iter().any(|model| model.id == upstream.id) {
                 continue;
@@ -542,6 +576,7 @@ fn build_model_list() -> Vec<Model> {
         }
     }
     models
+
 }
 
 /// GET /v1/models/:model_id
@@ -855,6 +890,26 @@ fn empty_response_error_event(oversized_context: bool) -> SseEvent {
     )
 }
 
+/// 上游读流出现传输层错误（解码失败/连接中断/超时）时应返回给客户端的事件。
+///
+/// `Err` 只可能来自传输层异常——正常完成只通过 `None`（EOF）传达，见
+/// `StreamContext::is_empty_response` 文档。因此哪怕此前已经产生了部分内容（thinking/text/
+/// tool_use），也不能用 `generate_final_events`/`finish_and_get_all_events` 把中断伪装成正常的
+/// end_turn/tool_use 完成，否则客户端会把截断的响应当成任务已完成而停止推进，只能靠用户手动
+/// 重新输入才能恢复，且不会自动重试。
+fn stream_interrupted_error_event() -> SseEvent {
+    SseEvent::new(
+        "error",
+        serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "overloaded_error",
+                "message": "Upstream connection was interrupted before the response finished. Please retry."
+            }
+        }),
+    )
+}
+
 /// 创建 SSE 事件流
 fn create_sse_stream(
     response: reqwest::Response,
@@ -927,7 +982,11 @@ fn create_sse_stream(
                                     vec![empty_response_error_event(false)]
                                 }
                             } else {
-                                ctx.generate_final_events()
+                                tracing::warn!(
+                                    est_input_tokens = ctx.input_tokens,
+                                    "流读取错误但已产生部分内容，补发 error 事件防止伪装成正常完成"
+                                );
+                                vec![stream_interrupted_error_event()]
                             };
                             let bytes: Vec<Result<Bytes, Infallible>> = final_events
                                 .into_iter()
@@ -1707,7 +1766,14 @@ fn create_buffered_sse_stream(
                                         vec![empty_response_error_event(false)]
                                     }
                                 } else {
-                                    ctx.finish_and_get_all_events()
+                                    // buffered 端点是 all-or-nothing 契约：此前缓冲的 message_start/
+                                    // thinking/text/tool_use 从未发给客户端，中断时随本次 error 事件一并
+                                    // 丢弃即可，无需（也无法）像 streaming 路径那样只替换收尾帧。
+                                    tracing::warn!(
+                                        est_input_tokens = ctx.input_tokens(),
+                                        "流读取错误但已产生部分内容（buffered 路径），补发 error 事件防止伪装成正常完成"
+                                    );
+                                    vec![stream_interrupted_error_event()]
                                 };
                                 let bytes: Vec<Result<Bytes, Infallible>> = all_events
                                     .into_iter()
@@ -1796,5 +1862,21 @@ mod tests {
     fn test_sonnet_4_6_max_tokens_unchanged() {
         // 回归
         assert_eq!(find_by_id("claude-sonnet-4-6").unwrap().max_tokens, 750_000);
+    }
+
+    #[test]
+    fn test_stream_interrupted_error_event_signals_failure_not_success() {
+        // 流中断（已有部分内容）必须报错重试，不能是伪装成功的 message_delta/message_stop
+        let event = stream_interrupted_error_event();
+        assert_eq!(event.event, "error");
+        assert_eq!(event.data["type"], "error");
+        assert_eq!(event.data["error"]["type"], "overloaded_error");
+        assert!(
+            event.data["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("interrupted"),
+            "错误信息应说明是连接中断导致，而非正常结束"
+        );
     }
 }
