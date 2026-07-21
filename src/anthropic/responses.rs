@@ -904,6 +904,15 @@ impl ResponseAccumulator {
 struct StreamMarkers {
     emitted_tool_args: HashMap<String, usize>,
     completed_tools: HashMap<String, bool>,
+    tool_output_indices: HashMap<String, usize>,
+    next_output_index: usize,
+    emitted_reasoning_len: usize,
+    reasoning_output_index: Option<usize>,
+    reasoning_item_done: bool,
+    emitted_text_len: usize,
+    text_output_index: Option<usize>,
+    text_item_done: bool,
+    sequence_number: u64,
 }
 
 fn now_seconds() -> i64 {
@@ -1009,6 +1018,14 @@ fn response_body(acc: &ResponseAccumulator) -> Value {
 
 fn sse(event: &str, data: Value) -> Bytes {
     Bytes::from(format!("event: {event}\ndata: {data}\n\n"))
+}
+
+fn numbered_sse(markers: &mut StreamMarkers, event: &str, mut data: Value) -> Bytes {
+    if let Value::Object(object) = &mut data {
+        object.insert("sequence_number".to_string(), json!(markers.sequence_number));
+    }
+    markers.sequence_number += 1;
+    sse(event, data)
 }
 
 fn process_event(acc: &mut ResponseAccumulator, event: Event) {
@@ -1499,15 +1516,84 @@ fn collect_chat_tool_stream_events(
     events
 }
 
-fn tool_output_index(acc: &ResponseAccumulator, tool_index: usize) -> usize {
-    let mut index = 0;
-    if !acc.reasoning.is_empty() {
-        index += 1;
+fn collect_reasoning_stream_events(
+    acc: &ResponseAccumulator,
+    markers: &mut StreamMarkers,
+    final_chunk: bool,
+) -> Vec<Result<Bytes, Infallible>> {
+    if acc.reasoning.is_empty() { return Vec::new(); }
+    let output_index = match markers.reasoning_output_index {
+        Some(index) => index,
+        None => {
+            let index = markers.next_output_index;
+            markers.next_output_index += 1;
+            markers.reasoning_output_index = Some(index);
+            index
+        }
+    };
+    let item_id = format!("rs_{}", acc.id);
+    let mut events = Vec::new();
+    if markers.emitted_reasoning_len == 0 {
+        events.push(Ok(numbered_sse(markers,"response.output_item.added", json!({"type":"response.output_item.added","response_id":acc.id,"output_index":output_index,"item":{"type":"reasoning","id":item_id,"status":"in_progress","summary":[]}}))));
+        events.push(Ok(numbered_sse(markers,"response.reasoning_summary_part.added", json!({"type":"response.reasoning_summary_part.added","response_id":acc.id,"item_id":item_id,"output_index":output_index,"summary_index":0,"part":{"type":"summary_text","text":""}}))));
     }
-    if !acc.text.is_empty() {
-        index += 1;
+    if acc.reasoning.len() > markers.emitted_reasoning_len {
+        let delta = &acc.reasoning[markers.emitted_reasoning_len..];
+        markers.emitted_reasoning_len = acc.reasoning.len();
+        events.push(Ok(numbered_sse(markers,"response.reasoning_summary_text.delta", json!({"type":"response.reasoning_summary_text.delta","response_id":acc.id,"item_id":item_id,"output_index":output_index,"summary_index":0,"delta":delta}))));
     }
-    index + tool_index
+    if final_chunk && !markers.reasoning_item_done {
+        markers.reasoning_item_done = true;
+        events.push(Ok(numbered_sse(markers,"response.reasoning_summary_text.done", json!({"type":"response.reasoning_summary_text.done","response_id":acc.id,"item_id":item_id,"output_index":output_index,"summary_index":0,"text":acc.reasoning}))));
+        events.push(Ok(numbered_sse(markers,"response.reasoning_summary_part.done", json!({"type":"response.reasoning_summary_part.done","response_id":acc.id,"item_id":item_id,"output_index":output_index,"summary_index":0,"part":{"type":"summary_text","text":acc.reasoning}}))));
+        events.push(Ok(numbered_sse(markers,"response.output_item.done", json!({"type":"response.output_item.done","response_id":acc.id,"output_index":output_index,"item":{"type":"reasoning","id":item_id,"status":"completed","summary":[{"type":"summary_text","text":acc.reasoning}]}}))));
+    }
+    events
+}
+
+fn tool_output_index(markers: &mut StreamMarkers, call_id: &str) -> usize {
+    if let Some(index) = markers.tool_output_indices.get(call_id) {
+        return *index;
+    }
+    let index = markers.next_output_index;
+    markers.next_output_index += 1;
+    markers.tool_output_indices.insert(call_id.to_string(), index);
+    index
+}
+
+fn collect_text_stream_events(
+    acc: &ResponseAccumulator,
+    markers: &mut StreamMarkers,
+    final_chunk: bool,
+) -> Vec<Result<Bytes, Infallible>> {
+    if acc.text.is_empty() { return Vec::new(); }
+    let output_index = match markers.text_output_index {
+        Some(index) => index,
+        None => {
+            let index = markers.next_output_index;
+            markers.next_output_index += 1;
+            markers.text_output_index = Some(index);
+            index
+        }
+    };
+    let item_id = format!("msg_{}", acc.id);
+    let mut events = Vec::new();
+    if markers.emitted_text_len == 0 {
+        events.push(Ok(numbered_sse(markers,"response.output_item.added", json!({"type":"response.output_item.added","response_id":acc.id,"output_index":output_index,"item":{"type":"message","id":item_id,"status":"in_progress","role":"assistant","content":[]}}))));
+        events.push(Ok(numbered_sse(markers,"response.content_part.added", json!({"type":"response.content_part.added","response_id":acc.id,"item_id":item_id,"output_index":output_index,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}))));
+    }
+    if acc.text.len() > markers.emitted_text_len {
+        let delta = &acc.text[markers.emitted_text_len..];
+        markers.emitted_text_len = acc.text.len();
+        events.push(Ok(numbered_sse(markers,"response.output_text.delta", json!({"type":"response.output_text.delta","response_id":acc.id,"item_id":item_id,"output_index":output_index,"content_index":0,"delta":delta}))));
+    }
+    if final_chunk && !markers.text_item_done {
+        markers.text_item_done = true;
+        events.push(Ok(numbered_sse(markers,"response.output_text.done", json!({"type":"response.output_text.done","response_id":acc.id,"item_id":item_id,"output_index":output_index,"content_index":0,"text":acc.text}))));
+        events.push(Ok(numbered_sse(markers,"response.content_part.done", json!({"type":"response.content_part.done","response_id":acc.id,"item_id":item_id,"output_index":output_index,"content_index":0,"part":{"type":"output_text","text":acc.text,"annotations":[]}}))));
+        events.push(Ok(numbered_sse(markers,"response.output_item.done", json!({"type":"response.output_item.done","response_id":acc.id,"output_index":output_index,"item":{"type":"message","id":item_id,"status":"completed","role":"assistant","content":[{"type":"output_text","text":acc.text,"annotations":[]}]}}))));
+    }
+    events
 }
 
 fn collect_tool_stream_events(
@@ -1515,13 +1601,13 @@ fn collect_tool_stream_events(
     markers: &mut StreamMarkers,
 ) -> Vec<Result<Bytes, Infallible>> {
     let mut events: Vec<Result<Bytes, Infallible>> = Vec::new();
-    for (tool_index, tool) in acc.tools.iter().enumerate() {
-        let output_index = tool_output_index(acc, tool_index);
+    for tool in &acc.tools {
+        let output_index = tool_output_index(markers, &tool.call_id);
         let item_id = format!("fc_{}", tool.call_id);
         if !markers.emitted_tool_args.contains_key(&tool.call_id) {
             markers.emitted_tool_args.insert(tool.call_id.clone(), 0);
             markers.completed_tools.insert(tool.call_id.clone(), false);
-            events.push(Ok(sse(
+            events.push(Ok(numbered_sse(markers,
                 "response.output_item.added",
                 json!({
                     "type": "response.output_item.added",
@@ -1542,7 +1628,7 @@ fn collect_tool_stream_events(
             markers
                 .emitted_tool_args
                 .insert(tool.call_id.clone(), tool.arguments.len());
-            events.push(Ok(sse(
+            events.push(Ok(numbered_sse(markers,
                 "response.function_call_arguments.delta",
                 json!({
                     "type": "response.function_call_arguments.delta",
@@ -1561,7 +1647,7 @@ fn collect_tool_stream_events(
             .unwrap_or(false);
         if tool.done && !already_done {
             markers.completed_tools.insert(tool.call_id.clone(), true);
-            events.push(Ok(sse(
+            events.push(Ok(numbered_sse(markers,
                 "response.function_call_arguments.done",
                 json!({
                     "type": "response.function_call_arguments.done",
@@ -1571,7 +1657,7 @@ fn collect_tool_stream_events(
                     "arguments": tool.arguments
                 }),
             )));
-            events.push(Ok(sse(
+            events.push(Ok(numbered_sse(markers,
                 "response.output_item.done",
                 json!({
                     "type": "response.output_item.done",
@@ -1837,6 +1923,7 @@ async fn stream_response(
             "response.created",
             json!({
                 "type": "response.created",
+                "sequence_number": 0,
                 "response": {
                     "id": response_id,
                     "object": "response",
@@ -1849,6 +1936,7 @@ async fn stream_response(
             "response.in_progress",
             json!({
                 "type": "response.in_progress",
+                "sequence_number": 1,
                 "response": {
                     "id": response_id,
                     "object": "response",
@@ -1863,7 +1951,10 @@ async fn stream_response(
             body_stream,
             EventStreamDecoder::new(),
             ResponseAccumulator::new(response_id, model, estimated_input_tokens),
-            StreamMarkers::default(),
+            StreamMarkers {
+                sequence_number: 2,
+                ..StreamMarkers::default()
+            },
             snapshot,
             store_response,
             usage_tracker,
@@ -1891,8 +1982,6 @@ async fn stream_response(
                     if let Err(error) = decoder.feed(&chunk) {
                         tracing::warn!(%error, "Responses 流式帧缓冲失败");
                     }
-                    let old_text = accumulator.text.len();
-                    let old_reasoning = accumulator.reasoning.len();
                     let mut events: Vec<Result<Bytes, Infallible>> = Vec::new();
                     for result in decoder.decode_iter() {
                         match result {
@@ -1903,26 +1992,8 @@ async fn stream_response(
                             Err(error) => tracing::warn!(%error, "Responses 流式帧解析失败"),
                         }
                     }
-                    if accumulator.text.len() > old_text {
-                        events.push(Ok(sse(
-                            "response.output_text.delta",
-                            json!({
-                                "type": "response.output_text.delta",
-                                "delta": &accumulator.text[old_text..],
-                                "response_id": accumulator.id
-                            }),
-                        )));
-                    }
-                    if accumulator.reasoning.len() > old_reasoning {
-                        events.push(Ok(sse(
-                            "response.reasoning_summary_text.delta",
-                            json!({
-                                "type": "response.reasoning_summary_text.delta",
-                                "delta": &accumulator.reasoning[old_reasoning..],
-                                "response_id": accumulator.id
-                            }),
-                        )));
-                    }
+                    events.extend(collect_reasoning_stream_events(&accumulator, &mut markers, false));
+                    events.extend(collect_text_stream_events(&accumulator, &mut markers, false));
                     events.extend(collect_tool_stream_events(&accumulator, &mut markers));
                     Some((
                         stream::iter(events),
@@ -1946,7 +2017,8 @@ async fn stream_response(
                     record_usage(&usage_tracker, api_key_id, credential_id, &accumulator);
                     let body = response_body(&accumulator);
                     Some((
-                        stream::iter(vec![Ok(sse(
+                        stream::iter(vec![Ok(numbered_sse(
+                            &mut markers,
                             "response.failed",
                             json!({"type": "response.failed", "response": body}),
                         ))]),
@@ -1971,26 +2043,8 @@ async fn stream_response(
                     }
                     record_usage(&usage_tracker, api_key_id, credential_id, &accumulator);
                     let mut events: Vec<Result<Bytes, Infallible>> = Vec::new();
-                    if !accumulator.text.is_empty() {
-                        events.push(Ok(sse(
-                            "response.output_text.done",
-                            json!({
-                                "type": "response.output_text.done",
-                                "response_id": accumulator.id,
-                                "text": accumulator.text
-                            }),
-                        )));
-                    }
-                    if !accumulator.reasoning.is_empty() {
-                        events.push(Ok(sse(
-                            "response.reasoning_summary_text.done",
-                            json!({
-                                "type": "response.reasoning_summary_text.done",
-                                "response_id": accumulator.id,
-                                "text": accumulator.reasoning
-                            }),
-                        )));
-                    }
+                    events.extend(collect_reasoning_stream_events(&accumulator, &mut markers, true));
+                    events.extend(collect_text_stream_events(&accumulator, &mut markers, true));
                     events.extend(collect_tool_stream_events(&accumulator, &mut markers));
                     let body = response_body(&accumulator);
                     let event_name = if accumulator.failed.is_some() {
@@ -1998,7 +2052,7 @@ async fn stream_response(
                     } else {
                         "response.completed"
                     };
-                    events.push(Ok(sse(
+                    events.push(Ok(numbered_sse(&mut markers,
                         event_name,
                         json!({"type": event_name, "response": body}),
                     )));
