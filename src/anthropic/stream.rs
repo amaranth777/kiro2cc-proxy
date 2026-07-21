@@ -2636,19 +2636,11 @@ mod tests {
     #[test]
     fn test_context_window_opus_4_6_is_1m() {
         assert_eq!(context_window_for_model("claude-opus-4-6"), 750_000);
-        assert_eq!(
-            context_window_for_model("claude-opus-4-6-thinking"),
-            750_000
-        );
     }
 
     #[test]
     fn test_context_window_fable_5_is_1m() {
         assert_eq!(context_window_for_model("claude-fable-5"), 750_000);
-        assert_eq!(
-            context_window_for_model("claude-fable-5-thinking"),
-            750_000
-        );
     }
 
     #[test]

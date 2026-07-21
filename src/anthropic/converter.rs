@@ -1508,23 +1508,22 @@ fn build_additional_model_request_fields(
 
     if let Some(t) = &req.thinking {
         let mut thinking_obj = serde_json::Map::new();
-        if t.thinking_type == "enabled" || t.thinking_type == "adaptive" {
-            thinking_obj.insert("type".into(), serde_json::json!("adaptive"));
+        // Kiro 只接受 adaptive/disabled；Anthropic 的 enabled 语义等价转换为 adaptive。
+        let kiro_thinking_type = if t.thinking_type == "enabled" {
+            "adaptive"
         } else {
-            thinking_obj.insert("type".into(), serde_json::json!("disabled"));
-        }
+            t.thinking_type.as_str()
+        };
+        thinking_obj.insert("type".into(), serde_json::json!(kiro_thinking_type));
         fields.insert("thinking".into(), serde_json::Value::Object(thinking_obj));
     }
 
-    let effort = req
-        .output_config
-        .as_ref()
-        .map(|c| c.effort.as_str())
-        .unwrap_or("high");
-    fields.insert(
-        "output_config".into(),
-        serde_json::json!({ "effort": effort }),
-    );
+    if let Some(config) = req.output_config.as_ref() {
+        fields.insert(
+            "output_config".into(),
+            serde_json::json!({ "effort": config.effort }),
+        );
+    }
 
     if req.max_tokens > 0 {
         let cap = model_max_output_tokens(&req.model);
@@ -2259,33 +2258,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_map_model_thinking_suffix_sonnet() {
-        // thinking 后缀不应影响 sonnet 模型映射
-        let result = map_model("claude-sonnet-4-5-20250929-thinking");
-        assert_eq!(result, Some("claude-sonnet-4.5".to_string()));
-    }
-
-    #[test]
-    fn test_map_model_thinking_suffix_opus_4_5() {
-        // thinking 后缀不应影响 opus 4.5 模型映射
-        let result = map_model("claude-opus-4-5-20251101-thinking");
-        assert_eq!(result, Some("claude-opus-4.5".to_string()));
-    }
-
-    #[test]
-    fn test_map_model_thinking_suffix_opus_4_6() {
-        // thinking 后缀不应影响 opus 4.6 模型映射
-        let result = map_model("claude-opus-4-6-thinking");
-        assert_eq!(result, Some("claude-opus-4.6".to_string()));
-    }
-
-    #[test]
-    fn test_map_model_thinking_suffix_haiku() {
-        // thinking 后缀不应影响 haiku 模型映射
-        let result = map_model("claude-haiku-4-5-20251001-thinking");
-        assert_eq!(result, Some("claude-haiku-4.5".to_string()));
-    }
 
     #[test]
     fn test_determine_chat_trigger_type() {
@@ -3235,10 +3207,7 @@ mod tests {
             map_model("claude-fable-5"),
             Some("claude-fable-5".to_string())
         );
-        assert_eq!(
-            map_model("claude-fable-5-thinking"),
-            Some("claude-fable-5".to_string())
-        );
+
     }
 
     #[test]
@@ -3277,5 +3246,49 @@ mod tests {
             result.additional_model_request_fields.is_none(),
             "gpt-5.6 系列必须整体省略 additionalModelRequestFields 字段"
         );
+    }
+
+    fn thinking_request(thinking_type: Option<&str>) -> MessagesRequest {
+        let mut value = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "Hello"}]
+        });
+        if let Some(thinking_type) = thinking_type {
+            value["thinking"] = serde_json::json!({"type": thinking_type});
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn test_additional_fields_preserve_explicit_thinking_type() {
+        for thinking_type in ["enabled", "adaptive", "disabled"] {
+            let req = thinking_request(Some(thinking_type));
+            let fields = build_additional_model_request_fields(&req, "claude-sonnet-4.6")
+                .expect("Claude 请求应包含 additionalModelRequestFields");
+
+            let expected_type = if thinking_type == "enabled" {
+                "adaptive"
+            } else {
+                thinking_type
+            };
+            assert_eq!(fields["thinking"]["type"], expected_type);
+            assert!(fields.get("output_config").is_none());
+        }
+    }
+
+    #[test]
+    fn test_additional_fields_default_request_uses_adaptive() {
+        // 请求入口会在缺省字段时补 adaptive；转换层必须原样发送该值。
+        let mut req = thinking_request(None);
+        req.thinking = Some(super::super::types::Thinking {
+            thinking_type: "adaptive".to_string(),
+            budget_tokens: 0,
+        });
+        let fields = build_additional_model_request_fields(&req, "claude-sonnet-4.6")
+            .expect("Claude 请求应包含 additionalModelRequestFields");
+
+        assert_eq!(fields["thinking"]["type"], "adaptive");
+        assert!(fields.get("output_config").is_none());
     }
 }

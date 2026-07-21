@@ -27,7 +27,7 @@ use super::middleware::{ApiKeyContext, AppState};
 use super::stream::{BufferedStreamContext, SseEvent, StreamContext};
 use super::types::{
     CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model, ModelsResponse,
-    OutputConfig, Thinking,
+    Thinking,
 };
 use super::websearch;
 
@@ -270,16 +270,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-sonnet-4-5-20250929-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+
         Model {
             id: "claude-opus-4-5-20251101".to_string(),
             object: "model".to_string(),
@@ -290,16 +281,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-opus-4-5-20251101-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+
         Model {
             id: "claude-sonnet-4-6".to_string(),
             object: "model".to_string(),
@@ -310,16 +292,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-sonnet-4-6-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+
         Model {
             id: "claude-sonnet-5".to_string(),
             object: "model".to_string(),
@@ -330,16 +303,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-sonnet-5-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1777000000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+
         Model {
             id: "claude-sonnet-5".to_string(),
             object: "model".to_string(),
@@ -350,16 +314,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 64000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-sonnet-5-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1775600000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-            context_length: 750_000,
-        },
+
         Model {
             id: "claude-opus-4-6".to_string(),
             object: "model".to_string(),
@@ -370,16 +325,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-opus-4-6-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+
         Model {
             id: "claude-opus-4-7".to_string(),
             object: "model".to_string(),
@@ -390,16 +336,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-opus-4-7-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1773000000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+
         Model {
             id: "claude-opus-4-8".to_string(),
             object: "model".to_string(),
@@ -410,16 +347,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-opus-4-8-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1775600000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+
         Model {
             id: "claude-fable-5".to_string(),
             object: "model".to_string(),
@@ -430,16 +358,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-fable-5-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1772582400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Fable 5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+
         Model {
             id: "claude-haiku-4-5-20251001".to_string(),
             object: "model".to_string(),
@@ -450,16 +369,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             max_tokens: 750_000,
             context_length: 750_000,
         },
-        Model {
-            id: "claude-haiku-4-5-20251001-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+
         // === 非 Claude 模型 ===
         Model {
             id: "auto".to_string(),
@@ -651,7 +561,7 @@ pub async fn post_messages(
     };
 
     // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
-    override_thinking_from_model_name(&mut payload);
+    apply_default_thinking(&mut payload);
     tracing::info!(
         thinking_type = ?payload.thinking.as_ref().map(|t| t.thinking_type.as_str()),
         budget_tokens = ?payload.thinking.as_ref().map(|t| t.budget_tokens),
@@ -1358,44 +1268,14 @@ fn extract_client_ip(
     connect_info.map(|addr| addr.ip().to_string())
 }
 
-/// 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
-///
-/// - Opus 4.6：覆写为 adaptive 类型
-/// - 其他模型：覆写为 enabled 类型
-/// - budget_tokens 固定为 20000
-fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
-    let model_lower = payload.model.to_lowercase();
-    if !model_lower.contains("thinking") {
-        return;
-    }
-
-    let is_opus_adaptive = model_lower.contains("opus")
-        && (model_lower.contains("4-6")
-            || model_lower.contains("4.6")
-            || model_lower.contains("4-8")
-            || model_lower.contains("4.8"));
-
-    let thinking_type = if is_opus_adaptive {
-        "adaptive"
-    } else {
-        "enabled"
-    };
-
-    tracing::info!(
-        model = %payload.model,
-        thinking_type = thinking_type,
-        "模型名包含 thinking 后缀，覆写 thinking 配置"
-    );
-
-    payload.thinking = Some(Thinking {
-        thinking_type: thinking_type.to_string(),
-        budget_tokens: 20000,
-    });
-
-    if is_opus_adaptive {
-        payload.output_config = Some(OutputConfig {
-            effort: "high".to_string(),
-            format: None,
+/// Apply the default only when the client omitted `thinking`.
+/// Explicit enabled/adaptive/disabled values are preserved verbatim.
+fn apply_default_thinking(payload: &mut MessagesRequest) {
+    if payload.thinking.is_none() {
+        tracing::info!(model = %payload.model, "请求未声明 thinking，默认启用 adaptive");
+        payload.thinking = Some(Thinking {
+            thinking_type: "adaptive".to_string(),
+            budget_tokens: 0,
         });
     }
 }
@@ -1465,7 +1345,7 @@ pub async fn post_messages_cc(
     };
 
     // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
-    override_thinking_from_model_name(&mut payload);
+    apply_default_thinking(&mut payload);
     tracing::info!(
         thinking_type = ?payload.thinking.as_ref().map(|t| t.thinking_type.as_str()),
         budget_tokens = ?payload.thinking.as_ref().map(|t| t.budget_tokens),
@@ -1823,8 +1703,7 @@ mod tests {
     fn test_opus_4_6_max_tokens_is_128k() {
         let m = find_by_id("claude-opus-4-6").expect("claude-opus-4-6 缺失");
         assert_eq!(m.max_tokens, 750_000);
-        let mt = find_by_id("claude-opus-4-6-thinking").expect("claude-opus-4-6-thinking 缺失");
-        assert_eq!(mt.max_tokens, 750_000);
+
     }
 
     #[test]
@@ -1837,12 +1716,7 @@ mod tests {
         assert_eq!(m.display_name, "Claude Fable 5");
     }
 
-    #[test]
-    fn test_fable_5_thinking_present() {
-        let m = find_by_id("claude-fable-5-thinking").expect("claude-fable-5-thinking 应存在");
-        assert_eq!(m.max_tokens, 750_000);
-        assert_eq!(m.display_name, "Claude Fable 5 (Thinking)");
-    }
+
 
     #[test]
     fn test_haiku_4_5_max_tokens_unchanged() {
@@ -1878,5 +1752,52 @@ mod tests {
                 .contains("interrupted"),
             "错误信息应说明是连接中断导致，而非正常结束"
         );
+    }
+
+    #[test]
+    fn test_thinking_defaults_to_adaptive_when_omitted() {
+        let mut payload: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .unwrap();
+
+        apply_default_thinking(&mut payload);
+
+        let thinking = payload.thinking.expect("应自动启用 thinking");
+        assert_eq!(thinking.thinking_type, "adaptive");
+    }
+
+    #[test]
+    fn test_explicit_thinking_is_preserved() {
+        for thinking_type in ["enabled", "adaptive", "disabled"] {
+            let mut payload: MessagesRequest = serde_json::from_value(serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "thinking": {"type": thinking_type},
+                "messages": [{"role": "user", "content": "hello"}]
+            }))
+            .unwrap();
+
+            apply_default_thinking(&mut payload);
+
+            assert_eq!(payload.thinking.unwrap().thinking_type, thinking_type);
+        }
+    }
+
+    #[test]
+    fn test_model_name_does_not_override_explicit_thinking() {
+        let mut payload: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 1024,
+            "thinking": {"type": "disabled"},
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .unwrap();
+
+        apply_default_thinking(&mut payload);
+
+        assert_eq!(payload.thinking.unwrap().thinking_type, "disabled");
     }
 }
