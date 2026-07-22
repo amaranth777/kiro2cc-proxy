@@ -847,6 +847,14 @@ impl ResponseAccumulator {
         }
     }
 
+    fn char_boundary_at_or_before(value: &str, index: usize) -> usize {
+        let mut boundary = index.min(value.len());
+        while boundary > 0 && !value.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        boundary
+    }
+
     fn drain_text(&mut self, final_chunk: bool) {
         loop {
             if !self.thinking_seen && !self.thinking {
@@ -857,11 +865,12 @@ impl ResponseAccumulator {
                     continue;
                 }
                 let keep = "<thinking>".len().saturating_sub(1);
-                let emit = if final_chunk {
+                let target = if final_chunk {
                     self.pending.len()
                 } else {
                     self.pending.len().saturating_sub(keep)
                 };
+                let emit = Self::char_boundary_at_or_before(&self.pending, target);
                 if emit > 0 {
                     self.text.push_str(&self.pending[..emit]);
                     self.pending.drain(..emit);
@@ -877,11 +886,12 @@ impl ResponseAccumulator {
                     continue;
                 }
                 let keep = "</thinking>".len().saturating_sub(1);
-                let emit = if final_chunk {
+                let target = if final_chunk {
                     self.pending.len()
                 } else {
                     self.pending.len().saturating_sub(keep)
                 };
+                let emit = Self::char_boundary_at_or_before(&self.pending, target);
                 if emit > 0 {
                     self.reasoning.push_str(&self.pending[..emit]);
                     self.pending.drain(..emit);
