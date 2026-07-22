@@ -8,6 +8,9 @@
 //! ## 标准端点 (/v1)
 //! - `GET /v1/models` - 获取可用模型列表
 //! - `POST /v1/messages` - 创建消息（对话）
+//! - `POST /v1/responses` - OpenAI Responses API 兼容入口
+//! - `POST /v1/chat/completions` - OpenAI Chat Completions API 兼容入口
+//! - `POST /v1/completions` - OpenAI legacy Completions API 兼容入口
 //! - `POST /v1/messages/count_tokens` - 计算 token 数量
 //!
 //! ## Claude Code 兼容端点 (/cc/v1)
@@ -27,6 +30,7 @@ mod converter;
 pub(crate) mod handlers;
 pub mod middleware;
 mod model_catalog;
+mod responses;
 mod router;
 mod stream;
 pub mod types;

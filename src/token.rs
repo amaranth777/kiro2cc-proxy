@@ -27,6 +27,9 @@ pub struct CountTokensConfig {
     /// 代理配置
     pub proxy: Option<ProxyConfig>,
 
+    /// 额外信任的 CA 证书路径（PEM 格式）
+    pub ca_cert_path: Option<String>,
+
     pub tls_backend: TlsBackend,
 }
 
@@ -139,7 +142,12 @@ async fn call_remote_count_tokens(
     messages: &[Message],
     tools: &Option<Vec<Tool>>,
 ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-    let client = build_client(config.proxy.as_ref(), 300, config.tls_backend)?;
+    let client = build_client(
+        config.proxy.as_ref(),
+        300,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
 
     // 构建请求体
     let request = CountTokensRequest {

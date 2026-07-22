@@ -3,7 +3,8 @@
 //!
 //! 提供统一的 HTTP Client 构建功能，支持代理配置
 
-use reqwest::{Client, Proxy};
+use reqwest::{Certificate, Client, Proxy};
+use std::fs;
 use std::time::Duration;
 
 use crate::model::config::TlsBackend;
@@ -49,6 +50,7 @@ pub fn build_client(
     proxy: Option<&ProxyConfig>,
     timeout_secs: u64,
     tls_backend: TlsBackend,
+    ca_cert_path: Option<&str>,
 ) -> anyhow::Result<Client> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
@@ -60,6 +62,13 @@ pub fn build_client(
     // 无论配置为 Rustls 还是 NativeTls，统一使用 rustls 后端。
     builder = builder.use_rustls_tls();
     let _ = tls_backend; // 保留参数以兼容配置结构
+
+    if let Some(path) = ca_cert_path.filter(|path| !path.trim().is_empty()) {
+        let pem = fs::read(path)?;
+        let cert = Certificate::from_pem(&pem)?;
+        builder = builder.add_root_certificate(cert);
+        tracing::info!("HTTP Client 已加载额外 CA 证书: {}", path);
+    }
 
     if let Some(proxy_config) = proxy {
         let mut proxy = Proxy::all(&proxy_config.url)?;
@@ -98,14 +107,14 @@ mod tests {
 
     #[test]
     fn test_build_client_without_proxy() {
-        let client = build_client(None, 30, TlsBackend::Rustls);
+        let client = build_client(None, 30, TlsBackend::Rustls, None);
         assert!(client.is_ok());
     }
 
     #[test]
     fn test_build_client_with_proxy() {
         let config = ProxyConfig::new("http://127.0.0.1:7890");
-        let client = build_client(Some(&config), 30, TlsBackend::Rustls);
+        let client = build_client(Some(&config), 30, TlsBackend::Rustls, None);
         assert!(client.is_ok());
     }
 }
