@@ -529,19 +529,35 @@ fn function_tools(tools: Option<&[Value]>) -> Result<Option<Vec<Tool>>, String> 
         if description.is_empty() && tool_type != "function" {
             description = format!("{tool_type} tool");
         }
-        let parameters = tool
-            .get("parameters")
-            .or_else(|| function.and_then(|value| value.get("parameters")))
-            .or_else(|| tool.get("input_schema"))
-            .or_else(|| tool.get("schema"))
-            .cloned();
-        let parameters = match parameters {
-            Some(value) if value.is_object() => value,
-            Some(_) if tool_type == "function" => {
-                return Err("function.parameters must be an object".into());
-            }
-            _ => default_tool_parameters(tool_type),
+        let parameters = if raw_name == "exec" {
+            json!({
+                "type": "object",
+                "properties": {
+                    "input": {"type": "string"}
+                },
+                "required": ["input"],
+                "additionalProperties": false
+            })
+        } else {
+            tool
+                .get("parameters")
+                .or_else(|| function.and_then(|value| value.get("parameters")))
+                .or_else(|| tool.get("input_schema"))
+                .or_else(|| tool.get("schema"))
+                .cloned()
+                .map_or_else(|| default_tool_parameters(tool_type), |value| {
+                    if value.is_object() {
+                        value
+                    } else if tool_type == "function" {
+                        json!(null)
+                    } else {
+                        default_tool_parameters(tool_type)
+                    }
+                })
         };
+        if parameters.is_null() {
+            return Err("function.parameters must be an object".into());
+        }
         let input_schema: Map<String, Value> = serde_json::from_value(parameters)
             .map_err(|_| "function.parameters must be an object")?;
         result.push(Tool {
@@ -788,6 +804,7 @@ struct ToolState {
 struct ResponseAccumulator {
     id: String,
     model: String,
+    exec_command_requested: bool,
     text: String,
     reasoning: String,
     thinking: bool,
@@ -803,10 +820,16 @@ struct ResponseAccumulator {
 }
 
 impl ResponseAccumulator {
-    fn new(id: String, model: String, input_tokens: i32) -> Self {
+    fn new(
+        id: String,
+        model: String,
+        input_tokens: i32,
+        exec_command_requested: bool,
+    ) -> Self {
         Self {
             id,
             model,
+            exec_command_requested,
             text: String::new(),
             reasoning: String::new(),
             thinking: false,
@@ -841,7 +864,37 @@ impl ResponseAccumulator {
             });
             index
         };
+        let previous_name = self.tools[index].name.clone();
         self.tools[index].arguments.push_str(input);
+        self.tools[index].name = normalize_tool_name(
+            &self.tools[index].name,
+            self.exec_command_requested,
+            &self.tools[index].arguments,
+        );
+        if previous_name != self.tools[index].name || stop {
+            tracing::info!(
+                target: "kiro2cc_proxy::responses_diag",
+                call_id = %call_id,
+                source_name = %name,
+                normalized_name = %self.tools[index].name,
+                fragment_len = input.len(),
+                arguments_len = self.tools[index].arguments.len(),
+                argument_prefix = %argument_prefix(&self.tools[index].arguments),
+                stop,
+                "Responses ToolUse normalized"
+            );
+        } else {
+            tracing::debug!(
+                target: "kiro2cc_proxy::responses_diag",
+                call_id = %call_id,
+                source_name = %name,
+                fragment_len = input.len(),
+                arguments_len = self.tools[index].arguments.len(),
+                argument_prefix = %argument_prefix(&self.tools[index].arguments),
+                stop,
+                "Responses ToolUse fragment"
+            );
+        }
         if stop {
             self.tools[index].done = true;
         }
@@ -943,6 +996,35 @@ fn function_call_item(tool: &ToolState, status: &str) -> Value {
     })
 }
 
+fn custom_tool_input_complete(arguments: &str) -> Option<String> {
+    serde_json::from_str::<Value>(arguments).ok().and_then(|value| {
+        value
+            .get("input")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| value.as_str().map(str::to_string))
+    })
+}
+
+fn custom_tool_input(arguments: &str) -> String {
+    custom_tool_input_complete(arguments).unwrap_or_else(|| arguments.to_string())
+}
+
+fn is_custom_tool(tool: &ToolState) -> bool {
+    tool.name == "exec" && tool.arguments.trim_start().starts_with("{\"input\"")
+}
+
+fn custom_tool_call_item(tool: &ToolState, status: &str, input: &str) -> Value {
+    json!({
+        "type": "custom_tool_call",
+        "id": format!("ctc_{}", tool.call_id),
+        "call_id": tool.call_id,
+        "name": tool.name,
+        "input": input,
+        "status": status
+    })
+}
+
 fn output_items(acc: &ResponseAccumulator) -> Vec<Value> {
     let mut output = Vec::new();
     if !acc.reasoning.is_empty() {
@@ -963,7 +1045,11 @@ fn output_items(acc: &ResponseAccumulator) -> Vec<Value> {
         }));
     }
     for tool in &acc.tools {
-        output.push(function_call_item(tool, "completed"));
+        output.push(if is_custom_tool(tool) {
+            custom_tool_call_item(tool, "completed", &custom_tool_input(&tool.arguments))
+        } else {
+            function_call_item(tool, "completed")
+        });
     }
     output
 }
@@ -1155,6 +1241,50 @@ fn input_tokens(messages: &MessagesRequest) -> i32 {
     ) as i32
 }
 
+fn argument_prefix(arguments: &str) -> String {
+    arguments.chars().take(32).collect()
+}
+
+fn tool_summary(messages: &MessagesRequest) -> Vec<String> {
+    messages
+        .tools
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|tool| {
+            let mut keys = tool.input_schema.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            format!("{}[{}]", tool.name, keys.join(","))
+        })
+        .collect()
+}
+
+fn has_exec_command_tool(messages: &MessagesRequest) -> bool {
+    messages
+        .tools
+        .as_deref()
+        .is_some_and(|tools| tools.iter().any(|tool| tool.name == "exec_command"))
+}
+
+fn normalize_tool_name(
+    name: &str,
+    exec_command_requested: bool,
+    arguments: &str,
+) -> String {
+    if name == "exec"
+        && (exec_command_requested
+            || arguments.trim_start().starts_with("{\"cmd\"")
+            || serde_json::from_str::<Value>(arguments)
+                .ok()
+                .and_then(|value| value.get("cmd").cloned())
+                .is_some())
+    {
+        "exec_command".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 fn record_usage(
     usage_tracker: &Option<Arc<UsageTracker>>,
     api_key_id: Option<u32>,
@@ -1183,6 +1313,7 @@ async fn execute_non_stream(
     response_id: String,
     model: String,
     input_tokens: i32,
+    exec_command_requested: bool,
 ) -> Result<(ResponseAccumulator, u64), Response> {
     let (response, credential_id) = provider
         .call_api(request_body, bound_ids)
@@ -1192,7 +1323,12 @@ async fn execute_non_stream(
         .bytes()
         .await
         .map_err(|error| error_response(StatusCode::BAD_GATEWAY, error.to_string()))?;
-    let mut accumulator = ResponseAccumulator::new(response_id, model, input_tokens);
+    let mut accumulator = ResponseAccumulator::new(
+        response_id,
+        model,
+        input_tokens,
+        exec_command_requested,
+    );
     parse_events(&bytes, &mut accumulator);
     accumulator.finish();
     Ok((accumulator, credential_id))
@@ -1606,48 +1742,122 @@ fn collect_text_stream_events(
     events
 }
 
+fn tool_stream_ready(tool: &ToolState) -> bool {
+    if tool.name != "exec" || tool.done {
+        return true;
+    }
+    let arguments = tool.arguments.trim_start();
+    if arguments.starts_with("{\"input\"") {
+        custom_tool_input_complete(&tool.arguments).is_some()
+    } else {
+        arguments.starts_with("{\"cmd\"")
+    }
+}
+
+fn response_tool_summary(acc: &ResponseAccumulator) -> Vec<String> {
+    acc.tools
+        .iter()
+        .map(|tool| {
+            format!(
+                "{}:{}[len={},done={}]",
+                tool.call_id,
+                tool.name,
+                tool.arguments.len(),
+                tool.done
+            )
+        })
+        .collect()
+}
+
 fn collect_tool_stream_events(
     acc: &ResponseAccumulator,
     markers: &mut StreamMarkers,
 ) -> Vec<Result<Bytes, Infallible>> {
     let mut events: Vec<Result<Bytes, Infallible>> = Vec::new();
     for tool in &acc.tools {
+        if !tool_stream_ready(tool) {
+            tracing::info!(
+                target: "kiro2cc_proxy::responses_diag",
+                call_id = %tool.call_id,
+                name = %tool.name,
+                arguments_len = tool.arguments.len(),
+                argument_prefix = %argument_prefix(&tool.arguments),
+                "Responses tool SSE delayed"
+            );
+            continue;
+        }
         let output_index = tool_output_index(markers, &tool.call_id);
-        let item_id = format!("fc_{}", tool.call_id);
+        let custom = is_custom_tool(tool);
+        let item_id = if custom {
+            format!("ctc_{}", tool.call_id)
+        } else {
+            format!("fc_{}", tool.call_id)
+        };
         if !markers.emitted_tool_args.contains_key(&tool.call_id) {
             markers.emitted_tool_args.insert(tool.call_id.clone(), 0);
             markers.completed_tools.insert(tool.call_id.clone(), false);
+            tracing::info!(
+                target: "kiro2cc_proxy::responses_diag",
+                response_id = %acc.id,
+                call_id = %tool.call_id,
+                name = %tool.name,
+                output_index,
+                arguments_len = tool.arguments.len(),
+                argument_prefix = %argument_prefix(&tool.arguments),
+                custom,
+                "Responses SSE output_item.added"
+            );
+            let item = if custom {
+                custom_tool_call_item(tool, "in_progress", "")
+            } else {
+                json!({
+                    "type": "function_call",
+                    "id": item_id,
+                    "call_id": tool.call_id,
+                    "name": tool.name,
+                    "arguments": "",
+                    "status": "in_progress"
+                })
+            };
             events.push(Ok(numbered_sse(markers,
                 "response.output_item.added",
                 json!({
                     "type": "response.output_item.added",
                     "response_id": acc.id,
                     "output_index": output_index,
-                    "item": function_call_item(tool, "in_progress")
+                    "item": item
                 }),
             )));
         }
 
+        let input = if custom {
+            custom_tool_input_complete(&tool.arguments).unwrap_or_default()
+        } else {
+            tool.arguments.clone()
+        };
         let emitted_len = markers
             .emitted_tool_args
             .get(&tool.call_id)
             .copied()
             .unwrap_or(0);
-        if tool.arguments.len() > emitted_len {
-            let delta = &tool.arguments[emitted_len..];
+        if input.len() > emitted_len {
+            let delta = &input[emitted_len..];
             markers
                 .emitted_tool_args
-                .insert(tool.call_id.clone(), tool.arguments.len());
-            events.push(Ok(numbered_sse(markers,
-                "response.function_call_arguments.delta",
-                json!({
-                    "type": "response.function_call_arguments.delta",
-                    "response_id": acc.id,
-                    "item_id": item_id,
-                    "output_index": output_index,
-                    "delta": delta
-                }),
-            )));
+                .insert(tool.call_id.clone(), input.len());
+            let event_name = if custom {
+                "response.custom_tool_call_input.delta"
+            } else {
+                "response.function_call_arguments.delta"
+            };
+            let mut data = json!({
+                "type": event_name,
+                "response_id": acc.id,
+                "item_id": item_id,
+                "output_index": output_index,
+                "delta": delta
+            });
+            events.push(Ok(numbered_sse(markers, event_name, data.take())));
         }
 
         let already_done = markers
@@ -1657,23 +1867,52 @@ fn collect_tool_stream_events(
             .unwrap_or(false);
         if tool.done && !already_done {
             markers.completed_tools.insert(tool.call_id.clone(), true);
-            events.push(Ok(numbered_sse(markers,
-                "response.function_call_arguments.done",
+            let done_event_name = if custom {
+                "response.custom_tool_call_input.done"
+            } else {
+                "response.function_call_arguments.done"
+            };
+            let done_data = if custom {
                 json!({
-                    "type": "response.function_call_arguments.done",
+                    "type": done_event_name,
                     "response_id": acc.id,
                     "item_id": item_id,
                     "output_index": output_index,
-                    "arguments": tool.arguments
-                }),
-            )));
+                    "input": input
+                })
+            } else {
+                json!({
+                    "type": done_event_name,
+                    "response_id": acc.id,
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "arguments": input
+                })
+            };
+            events.push(Ok(numbered_sse(markers, done_event_name, done_data)));
+            tracing::info!(
+                target: "kiro2cc_proxy::responses_diag",
+                response_id = %acc.id,
+                call_id = %tool.call_id,
+                name = %tool.name,
+                output_index,
+                arguments_len = input.len(),
+                argument_prefix = %argument_prefix(&input),
+                custom,
+                "Responses SSE output_item.done"
+            );
+            let item = if custom {
+                custom_tool_call_item(tool, "completed", &input)
+            } else {
+                function_call_item(tool, "completed")
+            };
             events.push(Ok(numbered_sse(markers,
                 "response.output_item.done",
                 json!({
                     "type": "response.output_item.done",
                     "response_id": acc.id,
                     "output_index": output_index,
-                    "item": function_call_item(tool, "completed")
+                    "item": item
                 }),
             )));
         }
@@ -1717,6 +1956,17 @@ pub async fn post_responses(
     let usage_tracker = state.usage_tracker.clone();
     let response_id = format!("resp_{}", Uuid::new_v4().simple());
     let estimated_input_tokens = input_tokens(&messages);
+    let exec_command_requested = has_exec_command_tool(&messages);
+    tracing::info!(
+        target: "kiro2cc_proxy::responses_diag",
+        response_id = %response_id,
+        model = %request.model,
+        stream = request.stream,
+        input_tokens = estimated_input_tokens,
+        exec_command_requested,
+        tools = ?tool_summary(&messages),
+        "Responses request tool summary"
+    );
     let snapshot = RequestSnapshot::from(&messages);
 
     if request.stream {
@@ -1727,6 +1977,7 @@ pub async fn post_responses(
             response_id,
             request.model,
             estimated_input_tokens,
+            exec_command_requested,
             snapshot,
             request.store,
             usage_tracker,
@@ -1743,10 +1994,22 @@ pub async fn post_responses(
         Ok(bytes) => bytes,
         Err(error) => return error_response(StatusCode::BAD_GATEWAY, error.to_string()),
     };
-    let mut accumulator =
-        ResponseAccumulator::new(response_id.clone(), request.model, estimated_input_tokens);
+    let mut accumulator = ResponseAccumulator::new(
+        response_id.clone(),
+        request.model,
+        estimated_input_tokens,
+        exec_command_requested,
+    );
     parse_events(&bytes, &mut accumulator);
     accumulator.finish();
+    tracing::info!(
+        target: "kiro2cc_proxy::responses_diag",
+        response_id = %accumulator.id,
+        model = %accumulator.model,
+        failed = ?accumulator.failed,
+        tools = ?response_tool_summary(&accumulator),
+        "Responses non-stream completed"
+    );
     if request.store && accumulator.failed.is_none() {
         save_conversation(response_id, &snapshot, &accumulator);
     }
@@ -1795,6 +2058,7 @@ pub async fn post_chat_completions(
     let usage_tracker = state.usage_tracker.clone();
     let response_id = format!("chatcmpl_{}", Uuid::new_v4().simple());
     let estimated_input_tokens = input_tokens(&messages);
+    let exec_command_requested = has_exec_command_tool(&messages);
 
     if request.stream {
         return chat_stream_response(
@@ -1804,6 +2068,7 @@ pub async fn post_chat_completions(
             response_id,
             request.model,
             estimated_input_tokens,
+            exec_command_requested,
             usage_tracker,
             api_key_id,
         )
@@ -1817,6 +2082,7 @@ pub async fn post_chat_completions(
         response_id,
         request.model,
         estimated_input_tokens,
+        exec_command_requested,
     )
     .await
     {
@@ -1871,6 +2137,7 @@ pub async fn post_completions(
     let usage_tracker = state.usage_tracker.clone();
     let response_id = format!("cmpl_{}", Uuid::new_v4().simple());
     let estimated_input_tokens = input_tokens(&messages);
+    let exec_command_requested = false;
 
     if request.stream {
         return completion_stream_response(
@@ -1880,6 +2147,7 @@ pub async fn post_completions(
             response_id,
             request.model,
             estimated_input_tokens,
+            exec_command_requested,
             usage_tracker,
             api_key_id,
         )
@@ -1893,6 +2161,7 @@ pub async fn post_completions(
         response_id,
         request.model,
         estimated_input_tokens,
+        exec_command_requested,
     )
     .await
     {
@@ -1919,6 +2188,7 @@ async fn stream_response(
     response_id: String,
     model: String,
     estimated_input_tokens: i32,
+    exec_command_requested: bool,
     snapshot: RequestSnapshot,
     store_response: bool,
     usage_tracker: Option<Arc<UsageTracker>>,
@@ -1960,7 +2230,12 @@ async fn stream_response(
         (
             body_stream,
             EventStreamDecoder::new(),
-            ResponseAccumulator::new(response_id, model, estimated_input_tokens),
+            ResponseAccumulator::new(
+                response_id,
+                model,
+                estimated_input_tokens,
+                exec_command_requested,
+            ),
             StreamMarkers {
                 sequence_number: 2,
                 ..StreamMarkers::default()
@@ -2024,6 +2299,14 @@ async fn stream_response(
                 Some(Err(error)) => {
                     accumulator.failed = Some(error.to_string());
                     accumulator.finish();
+                    tracing::warn!(
+                        target: "kiro2cc_proxy::responses_diag",
+                        response_id = %accumulator.id,
+                        model = %accumulator.model,
+                        failed = ?accumulator.failed,
+                        tools = ?response_tool_summary(&accumulator),
+                        "Responses stream failed"
+                    );
                     record_usage(&usage_tracker, api_key_id, credential_id, &accumulator);
                     let body = response_body(&accumulator);
                     Some((
@@ -2103,6 +2386,7 @@ async fn chat_stream_response(
     response_id: String,
     model: String,
     estimated_input_tokens: i32,
+    exec_command_requested: bool,
     usage_tracker: Option<Arc<UsageTracker>>,
     api_key_id: Option<u32>,
 ) -> Response {
@@ -2121,7 +2405,12 @@ async fn chat_stream_response(
         (
             body_stream,
             EventStreamDecoder::new(),
-            ResponseAccumulator::new(response_id, model, estimated_input_tokens),
+            ResponseAccumulator::new(
+                response_id,
+                model,
+                estimated_input_tokens,
+                exec_command_requested,
+            ),
             StreamMarkers::default(),
             usage_tracker,
             api_key_id,
@@ -2185,6 +2474,14 @@ async fn chat_stream_response(
                 Some(Err(error)) => {
                     accumulator.failed = Some(error.to_string());
                     accumulator.finish();
+                    tracing::warn!(
+                        target: "kiro2cc_proxy::responses_diag",
+                        response_id = %accumulator.id,
+                        model = %accumulator.model,
+                        failed = ?accumulator.failed,
+                        tools = ?response_tool_summary(&accumulator),
+                        "Responses stream failed"
+                    );
                     record_usage(&usage_tracker, api_key_id, credential_id, &accumulator);
                     let events = vec![
                         Ok(openai_data_sse(json!({
@@ -2261,6 +2558,7 @@ async fn completion_stream_response(
     response_id: String,
     model: String,
     estimated_input_tokens: i32,
+    exec_command_requested: bool,
     usage_tracker: Option<Arc<UsageTracker>>,
     api_key_id: Option<u32>,
 ) -> Response {
@@ -2273,7 +2571,12 @@ async fn completion_stream_response(
         (
             body_stream,
             EventStreamDecoder::new(),
-            ResponseAccumulator::new(response_id, model, estimated_input_tokens),
+            ResponseAccumulator::new(
+                response_id,
+                model,
+                estimated_input_tokens,
+                exec_command_requested,
+            ),
             usage_tracker,
             api_key_id,
             Some(credential_id),
@@ -2333,6 +2636,14 @@ async fn completion_stream_response(
                 Some(Err(error)) => {
                     accumulator.failed = Some(error.to_string());
                     accumulator.finish();
+                    tracing::warn!(
+                        target: "kiro2cc_proxy::responses_diag",
+                        response_id = %accumulator.id,
+                        model = %accumulator.model,
+                        failed = ?accumulator.failed,
+                        tools = ?response_tool_summary(&accumulator),
+                        "Responses stream failed"
+                    );
                     record_usage(&usage_tracker, api_key_id, credential_id, &accumulator);
                     let events = vec![
                         Ok(openai_data_sse(json!({
@@ -2391,4 +2702,99 @@ async fn completion_stream_response(
         .header(header::CACHE_CONTROL, "no-cache")
         .body(Body::from_stream(stream))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exec_tool_uses_code_mode_input_schema() {
+        let tools = function_tools(Some(&[json!({
+            "type": "function",
+            "name": "exec",
+            "parameters": {
+                "type": "object",
+                "properties": {"cmd": {"type": "string"}}
+            }
+        })]))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(tools[0].name, "exec");
+        assert_eq!(tools[0].input_schema.get("required"), Some(&json!(["input"])));
+        assert!(tools[0].input_schema.contains_key("properties"));
+        assert_eq!(tools[0].input_schema["properties"]["input"]["type"], "string");
+    }
+
+    #[test]
+    fn code_mode_exec_waits_for_argument_kind() {
+        let mut tool = ToolState {
+            call_id: "call_1".into(),
+            name: "exec".into(),
+            arguments: "{\"".into(),
+            done: false,
+        };
+        assert!(!tool_stream_ready(&tool));
+
+        tool.arguments.push_str("cmd\":\"pwd\"}");
+        assert!(tool_stream_ready(&tool));
+
+        tool.arguments = "{\"input\":\"pwd\"}".into();
+        assert!(tool_stream_ready(&tool));
+    }
+
+    #[test]
+    fn normalize_exec_only_when_exec_command_was_requested() {
+        assert_eq!(normalize_tool_name("exec", true, "{}"), "exec_command");
+        assert_eq!(normalize_tool_name("exec", false, "{}"), "exec");
+        assert_eq!(normalize_tool_name("lookup", true, "{}"), "lookup");
+        assert_eq!(normalize_tool_name("exec", false, "{\"cmd\":"), "exec_command");
+    }
+
+    #[test]
+    fn push_tool_normalizes_and_merges_by_call_id() {
+        let mut accumulator = ResponseAccumulator::new("resp".into(), "model".into(), 0, true);
+
+        accumulator.push_tool("exec", "call_1", "{\"cmd\":", false);
+        accumulator.push_tool("exec", "call_1", "\"pwd\"}", true);
+        accumulator.push_tool("lookup", "call_2", "{\"q\":\"x\"}", true);
+
+        assert_eq!(accumulator.tools.len(), 2);
+        assert_eq!(accumulator.tools[0].name, "exec_command");
+        assert_eq!(accumulator.tools[0].arguments, "{\"cmd\":\"pwd\"}");
+        assert!(accumulator.tools[0].done);
+        assert_eq!(accumulator.tools[1].name, "lookup");
+        assert_eq!(function_call_item(&accumulator.tools[0], "completed")["name"], "exec_command");
+    }
+
+    #[test]
+    fn ordinary_exec_function_is_unchanged_without_exec_command_tool() {
+        let mut accumulator = ResponseAccumulator::new("resp".into(), "model".into(), 0, false);
+        accumulator.push_tool("exec", "call_1", "{}", true);
+
+        assert_eq!(accumulator.tools[0].name, "exec");
+    }
+
+    #[test]
+    fn tool_added_event_does_not_duplicate_arguments_delta() {
+        let mut accumulator = ResponseAccumulator::new("resp".into(), "model".into(), 0, false);
+        accumulator.push_tool("exec", "call_1", "{\"input\":\"pwd\"}", true);
+        let mut markers = StreamMarkers::default();
+        let events = collect_tool_stream_events(&accumulator, &mut markers);
+        let output = events
+            .into_iter()
+            .map(|event| String::from_utf8(event.unwrap().to_vec()).unwrap())
+            .collect::<String>();
+
+        assert!(output.contains("event: response.output_item.added\n"));
+        assert!(output.contains("\"type\":\"custom_tool_call\""));
+        assert!(output.contains("\"input\":\"\""));
+        assert!(output.contains("event: response.custom_tool_call_input.delta\n"));
+        assert!(output.contains("\"delta\":\"pwd\""));
+        assert!(output.contains("event: response.custom_tool_call_input.done\n"));
+        assert!(output.contains("\"input\":\"pwd\""));
+        assert!(!output.contains("response.function_call_arguments"));
+        assert!(!output.contains("{\\\"input\\\":\\\"pwd\\\"}"));
+    }
 }
