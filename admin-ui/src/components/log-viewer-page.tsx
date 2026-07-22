@@ -26,8 +26,19 @@ function rowBackground(level: string): string {
 }
 
 function formatTimestamp(ts: string): string {
-  // "2026-06-08T10:23:44.123Z" → "2026-06-08 10:23:44.123"
-  return ts.replace('T', ' ').replace('Z', '')
+  const date = new Date(ts)
+  if (Number.isNaN(date.getTime())) return ts
+  const base = date.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).replace(/\//g, '-')
+  return `${base}.${String(date.getMilliseconds()).padStart(3, '0')}`
 }
 
 interface LogViewerPageProps {
