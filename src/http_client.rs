@@ -58,10 +58,21 @@ pub fn build_client(
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(30));
 
-    // native-tls 已从依赖中移除（项目仅用 rustls）；
-    // 无论配置为 Rustls 还是 NativeTls，统一使用 rustls 后端。
+    // Linux/macOS 使用 reqwest 默认的 webpki-roots。
     builder = builder.use_rustls_tls();
     let _ = tls_backend; // 保留参数以兼容配置结构
+
+    #[cfg(windows)]
+    {
+        let native_roots = rustls_native_certs::load_native_certs();
+        for error in native_roots.errors {
+            tracing::warn!("加载 Windows 系统根证书失败: {error}");
+        }
+        for cert in native_roots.certs {
+            builder = builder.add_root_certificate(Certificate::from_der(cert.as_ref())?);
+        }
+        tracing::info!("HTTP Client 已加载 Windows 系统根证书");
+    }
 
     if let Some(path) = ca_cert_path.filter(|path| !path.trim().is_empty()) {
         let pem = fs::read(path)?;
