@@ -1733,7 +1733,7 @@ fn merge_user_messages(
     model_id: &str,
 ) -> Result<HistoryUserMessage, ConversionError> {
     let mut content_parts = Vec::new();
-    let mut all_images = Vec::new();
+    let mut historical_image_count = 0usize;
     let mut all_tool_results = Vec::new();
 
     for msg in messages {
@@ -1741,8 +1741,15 @@ fn merge_user_messages(
         if !text.is_empty() {
             content_parts.push(text);
         }
-        all_images.extend(images);
+        historical_image_count += images.len();
         all_tool_results.extend(tool_results);
+    }
+
+    if historical_image_count > 0 {
+        content_parts.push(format!(
+            "[{} prior image(s) omitted from this follow-up request. Do not infer or claim visual details from them; ask the user to upload the image again if those details are needed.]",
+            historical_image_count
+        ));
     }
 
     let content = content_parts.join("\n");
@@ -1756,10 +1763,7 @@ fn merge_user_messages(
     // 保留文本内容，即使有工具结果也不丢弃用户文本
     let mut user_msg = UserMessage::new(&content, model_id);
 
-    if !all_images.is_empty() {
-        user_msg = user_msg.with_images(all_images);
-    }
-
+    // Historical image bytes are intentionally omitted; only the current turn carries images.
     if !all_tool_results.is_empty() {
         let mut ctx = UserInputMessageContext::new();
         ctx = ctx.with_tool_results(all_tool_results);
@@ -3084,6 +3088,66 @@ mod tests {
             }
         }
         assert!(found_tool_use, "合并后的 assistant 消息应包含 tool_use");
+    }
+
+    #[test]
+    fn test_history_omits_image_bytes_but_current_turn_keeps_images() {
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 1024,
+            messages: vec![
+                AnthropicMessage {
+                    role: "user".to_string(),
+                    content: serde_json::json!([
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "synthetic-image-bytes"}},
+                        {"type": "text", "text": "Remember this image."}
+                    ]),
+                },
+                AnthropicMessage {
+                    role: "assistant".to_string(),
+                    content: serde_json::json!("I will remember it."),
+                },
+                AnthropicMessage {
+                    role: "user".to_string(),
+                    content: serde_json::json!("What color was it?"),
+                },
+            ],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let state = convert_request(&req).unwrap().conversation_state;
+        assert!(state.current_message.user_input_message.images.is_empty());
+        let history_images: usize = state
+            .history
+            .iter()
+            .map(|message| match message {
+                Message::User(user) => user.user_input_message.images.len(),
+                Message::Assistant(_) => 0,
+            })
+            .sum();
+        assert_eq!(
+            history_images, 0,
+            "历史图片不能每轮重复发送 base64"
+        );
+        let history_text = state
+            .history
+            .iter()
+            .filter_map(|message| match message {
+                Message::User(user) => Some(user.user_input_message.content.as_str()),
+                Message::Assistant(_) => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(history_text.contains("prior image(s) omitted"));
+        assert!(history_text.contains("ask the user to upload the image again"));
     }
 
     #[test]

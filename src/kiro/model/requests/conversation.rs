@@ -282,12 +282,6 @@ impl UserMessage {
         }
     }
 
-    /// 设置图片
-    pub fn with_images(mut self, images: Vec<KiroImage>) -> Self {
-        self.images = images;
-        self
-    }
-
     /// 设置上下文
     pub fn with_context(mut self, context: UserInputMessageContext) -> Self {
         self.user_input_message_context = context;
