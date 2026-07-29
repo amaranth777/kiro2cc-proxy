@@ -318,6 +318,15 @@ fn evict_oldest_if_full<T: Clone>(map: &mut HashMap<String, CacheEntry<T>>) {
 
 static PREV_H0: OnceLock<Mutex<HashMap<String, CacheEntry<String>>>> = OnceLock::new();
 
+/// Separate frozen history[0] entries for request families sharing a session.
+/// Title-generation and main-conversation prompts must not freeze each other.
+fn history_cache_key(session_id: &str, content: &str) -> String {
+    let prefix: String = content.chars().take(512).collect();
+    let mut hasher = Sha256::new();
+    hasher.update(prefix.as_bytes());
+    format!("{session_id}#{:x}", hasher.finalize())
+}
+
 /// 从文本中剥除所有 `<system-reminder>...</system-reminder>` 标签及其内容。
 fn strip_system_reminders(text: &str) -> String {
     const OPEN_TAG: &str = "<system-reminder>";
@@ -509,6 +518,7 @@ fn normalize_billing_header(content: String) -> String {
 /// 按照用户要求：
 /// - sonnet 4.6/4-6 → claude-sonnet-4.6
 /// - 其他 sonnet → claude-sonnet-4.5
+/// - opus 5 → claude-opus-5
 /// - opus 4.5/4-5 → claude-opus-4.5
 /// - 其他 opus → claude-opus-4.6
 /// - 所有 haiku → claude-haiku-4.5
@@ -534,7 +544,12 @@ pub fn map_model(model: &str) -> Option<String> {
     } else if model_lower.contains("fable") {
         Some("claude-fable-5".to_string())
     } else if model_lower.contains("opus") {
-        if model_lower.contains("4-5") || model_lower.contains("4.5") {
+        if model_lower.contains("opus-5")
+            || model_lower.contains("opus.5")
+            || model_lower.contains("opus 5")
+        {
+            Some("claude-opus-5".to_string())
+        } else if model_lower.contains("4-5") || model_lower.contains("4.5") {
             Some("claude-opus-4.5".to_string())
         } else if model_lower.contains("4-8") || model_lower.contains("4.8") {
             Some("claude-opus-4.8".to_string())
@@ -1477,12 +1492,13 @@ fn convert_tools(tools: &Option<Vec<super::types::Tool>>) -> Vec<Tool> {
     converted
 }
 
-/// 根据模型返回 Kiro 允许的 max_tokens 上限
-/// claude-sonnet-5 Max Output = 64K，与 sonnet-4.x 同档，走默认分支即可
+/// 根据模型返回 Kiro 允许的 max_tokens 上限。
+/// claude-opus-5/4.7/4.8 的上限为 128K；其余沿用 64K。
 fn model_max_output_tokens(model: &str) -> i32 {
     let m = model.to_lowercase();
     if m.contains("opus-4-7") || m.contains("opus-4.7")
         || m.contains("opus-4-8") || m.contains("opus-4.8")
+        || m.contains("opus-5") || m.contains("opus.5") || m.contains("opus 5")
     {
         128000
     } else {
@@ -1621,12 +1637,12 @@ fn build_history(
                 }
             };
 
-            // 同一会话复用首轮 history[0]，冻结 cc_version/gitStatus/currentDate 等易变字段，
-            // 确保 Kiro 服务端跨轮次缓存命中。首轮写入，后续轮次直接返回首轮内容。
+            // 同一会话、同一请求族复用首轮 history[0]；标题等辅助请求不能污染主对话。
             let final_content = {
                 let cache = PREV_H0.get_or_init(|| Mutex::new(HashMap::new()));
                 let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(entry) = map.get_mut(session_id) {
+                let h0_key = history_cache_key(session_id, &final_content);
+                if let Some(entry) = map.get_mut(&h0_key) {
                     entry.last_used = Instant::now();
                     let frozen = entry.value.clone();
                     let h0_hash = {
@@ -1653,10 +1669,7 @@ fn build_history(
                         final_content.len(),
                         session_id
                     );
-                    map.insert(
-                        session_id.to_string(),
-                        CacheEntry::new(final_content.clone()),
-                    );
+                    map.insert(h0_key, CacheEntry::new(final_content.clone()));
                     evict_oldest_if_full(&mut map);
                     final_content
                 }
@@ -1964,6 +1977,29 @@ mod tests {
                 .unwrap()
                 .contains("opus")
         );
+    }
+
+    #[test]
+    fn test_map_model_opus_5_aliases() {
+        for model in [
+            "claude-opus-5",
+            "claude-opus-5-thinking",
+            "Claude Opus 5",
+            "claude-opus-5-20260101",
+        ] {
+            assert_eq!(map_model(model), Some("claude-opus-5".to_string()));
+        }
+        assert_eq!(map_model("claude-opus-4-8"), Some("claude-opus-4.8".to_string()));
+    }
+
+    #[test]
+    fn test_history_cache_key_separates_request_families() {
+        let session = "test-session";
+        let main = "You are the main conversation system prompt.";
+        let title = "Generate a concise title as JSON.";
+
+        assert_eq!(history_cache_key(session, main), history_cache_key(session, main));
+        assert_ne!(history_cache_key(session, main), history_cache_key(session, title));
     }
 
     #[test]
@@ -3354,5 +3390,13 @@ mod tests {
 
         assert_eq!(fields["thinking"]["type"], "adaptive");
         assert!(fields.get("output_config").is_none());
+    }
+
+    #[test]
+    fn test_model_max_output_tokens_opus_5() {
+        assert_eq!(model_max_output_tokens("claude-opus-5"), 128000);
+        assert_eq!(model_max_output_tokens("claude-opus-5-thinking"), 128000);
+        assert_eq!(model_max_output_tokens("claude-opus-4.6"), 64000);
+        assert_eq!(model_max_output_tokens("claude-sonnet-5"), 64000);
     }
 }
