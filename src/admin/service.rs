@@ -276,6 +276,9 @@ impl AdminService {
             auth_method: Some(req.auth_method),
             client_id: req.client_id,
             client_secret: req.client_secret,
+            provider: req.provider,
+            token_endpoint: req.token_endpoint,
+            scopes: req.scopes,
             priority: req.priority,
             region: req.region,
             auth_region: req.auth_region,
@@ -287,6 +290,7 @@ impl AdminService {
             proxy_url: req.proxy_url,
             proxy_username: req.proxy_username,
             proxy_password: req.proxy_password,
+            endpoint: None,
             disabled: false, // 新添加的账号默认启用
         };
 

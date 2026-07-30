@@ -771,7 +771,7 @@ fn to_messages(
     }
 
     let max_tokens = req.max_output_tokens.unwrap_or(4096).max(1);
-    let thinking = if req.reasoning.is_some() || req.model.to_lowercase().contains("thinking") {
+    let thinking = if req.reasoning.is_some() {
         Some(Thinking {
             thinking_type: "adaptive".into(),
             budget_tokens: max_tokens.min(24576),
@@ -1446,7 +1446,7 @@ fn chat_to_messages(req: &ChatCompletionRequest) -> Result<MessagesRequest, Stri
     }
 
     let max_tokens = req.max_tokens.unwrap_or(4096).max(1);
-    let thinking = if req.reasoning.is_some() || req.model.to_lowercase().contains("thinking") {
+    let thinking = if req.reasoning.is_some() {
         Some(Thinking {
             thinking_type: "adaptive".into(),
             budget_tokens: max_tokens.min(24576),

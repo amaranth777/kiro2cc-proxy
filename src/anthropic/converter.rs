@@ -37,9 +37,7 @@ fn normalize_json_schema(schema: serde_json::Value) -> serde_json::Value {
 }
 
 /// 提取顶层 `$defs` / `definitions` 作为 $ref 解析表。
-fn extract_schema_defs(
-    schema: &serde_json::Value,
-) -> serde_json::Map<String, serde_json::Value> {
+fn extract_schema_defs(schema: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     let mut defs = serde_json::Map::new();
     if let Some(obj) = schema.as_object() {
         for key in ["$defs", "definitions"] {
@@ -588,9 +586,13 @@ pub fn map_model(model: &str) -> Option<String> {
         } else if model_lower.contains("luna") {
             Some("gpt-5.6-luna".to_string())
         } else {
+            // GPT-5.6 variants are distinct products. Do not silently route an
+            // unknown suffix to a different tier.
             None
         }
     } else {
+        // Keep routing explicit. Dynamic discovery is availability metadata,
+        // not permission to guess an arbitrary upstream request model ID.
         None
     }
 }
@@ -1496,9 +1498,13 @@ fn convert_tools(tools: &Option<Vec<super::types::Tool>>) -> Vec<Tool> {
 /// claude-opus-5/4.7/4.8 的上限为 128K；其余沿用 64K。
 fn model_max_output_tokens(model: &str) -> i32 {
     let m = model.to_lowercase();
-    if m.contains("opus-4-7") || m.contains("opus-4.7")
-        || m.contains("opus-4-8") || m.contains("opus-4.8")
-        || m.contains("opus-5") || m.contains("opus.5") || m.contains("opus 5")
+    if m.contains("opus-4-7")
+        || m.contains("opus-4.7")
+        || m.contains("opus-4-8")
+        || m.contains("opus-4.8")
+        || m.contains("opus-5")
+        || m.contains("opus.5")
+        || m.contains("opus 5")
     {
         128000
     } else {
@@ -2012,8 +2018,19 @@ mod tests {
     }
 
     #[test]
-    fn test_map_model_unsupported() {
-        assert!(map_model("gpt-4").is_none());
+    fn test_map_model_empty_rejected() {
+        // 空字符串仍拒绝
+        assert!(map_model("").is_none());
+        assert!(map_model("   ").is_none());
+        assert!(map_model("-thinking").is_none());
+    }
+
+    #[test]
+    fn test_map_model_builtin_rules_unaffected() {
+        // 内置规则优先级不变
+        assert_eq!(map_model("claude-sonnet-4-5").unwrap(), "claude-sonnet-4.5");
+        assert_eq!(map_model("gpt-5.6-sol").unwrap(), "gpt-5.6-sol");
+        assert_eq!(map_model("glm-4.6").unwrap(), "glm-5");
     }
 
     #[test]
@@ -3390,6 +3407,17 @@ mod tests {
 
         assert_eq!(fields["thinking"]["type"], "adaptive");
         assert!(fields.get("output_config").is_none());
+    }
+
+    #[test]
+    fn test_model_suffix_does_not_override_explicit_thinking() {
+        let mut req = thinking_request(Some("disabled"));
+        req.model = "claude-sonnet-4-6-thinking".to_string();
+
+        assert_eq!(map_model(&req.model), Some("claude-sonnet-4.6".to_string()));
+        let fields = build_additional_model_request_fields(&req, "claude-sonnet-4.6")
+            .expect("Claude 请求应包含 additionalModelRequestFields");
+        assert_eq!(fields["thinking"]["type"], "disabled");
     }
 
     #[test]

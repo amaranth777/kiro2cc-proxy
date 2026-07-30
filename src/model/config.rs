@@ -149,6 +149,10 @@ pub struct Config {
     #[serde(default = "default_max_rpm_per_credential")]
     pub max_rpm_per_credential: u32,
 
+    /// `/v1/models` 动态列表缓存 TTL（秒），默认 3600
+    #[serde(default = "default_model_cache_ttl_secs")]
+    pub model_cache_ttl_secs: u64,
+
     /// Prompt cache 模拟与指纹追踪配置
     #[serde(default)]
     pub cache_simulation: CacheSimulationConfig,
@@ -199,6 +203,10 @@ fn default_load_balancing_mode() -> String {
     "priority".to_string()
 }
 
+fn default_model_cache_ttl_secs() -> u64 {
+    3600
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -223,6 +231,7 @@ impl Default for Config {
             admin_api_key: None,
             load_balancing_mode: default_load_balancing_mode(),
             max_rpm_per_credential: default_max_rpm_per_credential(),
+            model_cache_ttl_secs: default_model_cache_ttl_secs(),
             cache_simulation: CacheSimulationConfig::default(),
             config_path: None,
         }
@@ -297,6 +306,7 @@ impl Config {
     /// - `PROXY_PASSWORD`: 代理密码
     /// - `CA_CERT_PATH`: 额外信任的 CA 证书路径（PEM）
     /// - `LOAD_BALANCING_MODE`: 负载均衡模式
+    /// - `MODEL_CACHE_TTL_SECS`: /v1/models 动态列表缓存 TTL（秒）
     pub fn apply_env_overrides(&mut self) {
         if let Ok(v) = env::var("API_KEY") {
             self.api_key = Some(v);
@@ -336,6 +346,11 @@ impl Config {
         if let Ok(v) = env::var("LOAD_BALANCING_MODE") {
             self.load_balancing_mode = v;
         }
+        if let Ok(v) = env::var("MODEL_CACHE_TTL_SECS")
+            && let Ok(n) = v.parse::<u64>()
+        {
+            self.model_cache_ttl_secs = n;
+        }
 
         // CacheSimulationConfig 嵌套字段覆盖
         if let Ok(v) = env::var("CACHE_SIMULATION_FINGERPRINT_ENABLED")
@@ -364,5 +379,29 @@ impl Config {
             self.cache_simulation
                 .fingerprint_max_breakpoints_per_account = n;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_model_cache_ttl_default() {
+        let config = Config::default();
+        assert_eq!(config.model_cache_ttl_secs, 3600);
+    }
+
+    #[test]
+    fn test_model_cache_ttl_deserialize_default() {
+        // 配置缺省该字段时应回退默认 3600
+        let config: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.model_cache_ttl_secs, 3600);
+    }
+
+    #[test]
+    fn test_model_cache_ttl_deserialize_explicit() {
+        let config: Config = serde_json::from_str(r#"{"modelCacheTtlSecs": 60}"#).unwrap();
+        assert_eq!(config.model_cache_ttl_secs, 60);
     }
 }
