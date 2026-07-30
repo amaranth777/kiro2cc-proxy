@@ -473,9 +473,9 @@ bash start_server.sh restart   # 重启
 
 ### 多端点负载均衡（v2.8.7+）
 
-Kiro 上游的 4 个接入端点（`ide` / `runtime` / `codewhisperer` / `amazonq`）走独立的限流桶。本代理在单账号内自动轮询这些端点：429 时只封禁命中桶（30s 后自动恢复），不影响其它端点、不切换账号。
+Kiro 上游的 4 个接入端点（`ide` / `runtime` / `codewhisperer` / `amazonq`）走独立的限流桶。为保持已有部署的上游路由不变，未配置 `endpoint` 时仅使用历史默认 `ide`；只有账号显式配置 `endpoint` 后，才在声明的端点集合内轮询。429 时只封禁命中桶（30s 后自动恢复），不影响其它已启用端点、不切换账号。
 
-默认启用全部 4 端点。账号可通过 `endpoint` 字段声明首选端点（首选在首 + 剩余端点按默认序去重追加）：
+账号可通过 `endpoint` 显式启用端点集合（按声明顺序去重，**不会**自动补入其余端点）：
 
 ```json
 {
@@ -484,9 +484,9 @@ Kiro 上游的 4 个接入端点（`ide` / `runtime` / `codewhisperer` / `amazon
 }
 ```
 
-默认端点顺序：`ide → runtime → codewhisperer → amazonq`。
+未配置或配置空数组时仅使用 `ide`。例如 `endpoint: ["runtime", "codewhisperer"]` 时仅在 `runtime → codewhisperer` 间轮询。
 
-**回滚指引**：若某端点异常，修改 `endpoint` 字段移除该端点，重启即可（**无需**重发版本）。
+**回滚指引**：若某端点异常，移除该端点；如需恢复历史单端点路由，删除 `endpoint` 字段，重启即可（**无需**重发版本）。
 
 ---
 
