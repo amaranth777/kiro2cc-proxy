@@ -2670,11 +2670,6 @@ mod tests {
     }
 
     #[test]
-    fn test_context_window_fable_5_is_1m() {
-        assert_eq!(context_window_for_model("claude-fable-5"), 750_000);
-    }
-
-    #[test]
     fn test_context_window_all_models_unified_to_1m() {
         // contextUsage 本地化后所有模型统一返回 750K
         assert_eq!(

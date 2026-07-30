@@ -234,7 +234,7 @@ pub async fn get_credential_today_summary(
 
 /// GET /api/admin/models
 /// 获取当前代理支持的完整模型列表（admin 鉴权），直接来源于上游 ListAvailableModels
-/// 实时响应；上游调用失败时回退到本地静态模型表
+/// 实时响应；上游调用失败时回退到官方 CLI 动态目录
 pub async fn get_admin_models(State(state): State<AdminState>) -> impl IntoResponse {
     Json(AdminModelsResponse {
         object: "list".to_string(),
@@ -387,17 +387,12 @@ mod tests {
             .collect();
         assert_eq!(actual_ids, expected_ids);
 
-        for id in [
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-            "claude-fable-5",
-            "claude-sonnet-5",
-        ] {
-            assert!(actual_ids.contains(id), "模型列表应包含 {id}");
-        }
+        assert!(
+            !actual_ids.contains("claude-fable-5"),
+            "未被官方 CLI 发现的模型不得出现在目录中"
+        );
 
-        // 零账号场景下 list_available_models 必然失败，触发回退到本地静态模型表
+        // 零账号场景下 list_available_models 必然失败，回退到 CLI 动态目录。
         assert!(
             parsed
                 .data

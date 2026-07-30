@@ -12,6 +12,20 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const DEFAULT_TTL: Duration = Duration::from_secs(300);
+// User policy: hide only explicitly blocked models from automatic discovery.
+// New Kiro CLI models therefore appear without a code update.
+const BLOCKED_MODEL_IDS: &[&str] = &[
+    "auto",
+    "claude-opus-4.5",
+    "claude-sonnet-4.5",
+    "claude-sonnet-4",
+    "claude-haiku-4.5",
+    "deepseek-3.2",
+    "minimax-m2.5",
+    "minimax-m2.1",
+    "glm-5",
+    "qwen3-coder-next",
+];
 // ponytail: bounded external discovery; 15s covers the real kiro-cli startup latency without allowing a hung child to block requests indefinitely.
 const CLI_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -62,6 +76,11 @@ pub fn discover_models() -> Option<Vec<UpstreamModel>> {
     discover_models_with_ttl(DEFAULT_TTL)
 }
 
+/// True when a model is deliberately hidden from automatic discovery.
+fn is_blocked_model(id: &str) -> bool {
+    BLOCKED_MODEL_IDS.contains(&id)
+}
+
 pub(crate) fn metadata_for_id(id: &str) -> Option<UpstreamModel> {
     discover_models()?.into_iter().find(|model| model.id == id)
 }
@@ -87,13 +106,22 @@ fn discover_models_with_ttl(ttl: Duration) -> Option<Vec<UpstreamModel>> {
     }
 
     // Do not hold the process-wide cache lock while starting an external CLI.
-    let models = run_discovery_command().and_then(|stdout| parse_models(&stdout).ok());
+    let models = run_discovery_command()
+        .and_then(|stdout| parse_models(&stdout).ok())
+        .map(visible_models);
 
     if let Ok(mut entry) = cache().lock() {
         entry.loaded_at = Instant::now();
         entry.models = models.clone();
     }
     models
+}
+
+fn visible_models(models: Vec<UpstreamModel>) -> Vec<UpstreamModel> {
+    models
+        .into_iter()
+        .filter(|model| !is_blocked_model(&model.id))
+        .collect()
 }
 
 fn run_discovery_command() -> Option<Vec<u8>> {
@@ -216,5 +244,32 @@ mod tests {
         assert_eq!(value["id"], "deepseek-3.2");
         assert_eq!(value["context_length"], 164000);
         assert_eq!(value["thinking"], false);
+    }
+
+    #[test]
+    fn automatic_catalog_hides_only_blocked_models() {
+        let models = [
+            "claude-sonnet-4.6",
+            "claude-sonnet-4.5",
+            "auto",
+            "future-model",
+        ]
+        .into_iter()
+        .map(|id| UpstreamModel {
+            id: id.to_string(),
+            context_length: 1,
+            description: String::new(),
+            rate_multiplier: None,
+            thinking: false,
+        })
+        .collect::<Vec<_>>();
+
+        let visible = visible_models(models);
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].id, "claude-sonnet-4.6");
+        assert_eq!(visible[1].id, "future-model");
+        assert!(is_blocked_model("claude-sonnet-4.5"));
+        assert!(is_blocked_model("auto"));
+        assert!(!is_blocked_model("future-model"));
     }
 }

@@ -76,7 +76,7 @@ fn live_model_to_admin_item(
     }
 }
 
-/// 将本地静态模型条目映射为 `AdminModelItem`（上游调用失败时的回退路径）
+/// 将 CLI 动态目录条目映射为 `AdminModelItem`（上游调用失败时的回退路径）
 ///
 /// 纯函数，不涉及网络调用，可直接用 fake `Model` 单测。
 fn fallback_model_to_admin_item(
@@ -246,12 +246,12 @@ impl AdminService {
     /// 获取当前支持模型列表（直接来源于上游 ListAvailableModels 实时响应）
     ///
     /// 每次实时调用，不做缓存；上游调用失败（无可用账号、网络错误、非 2xx、
-    /// 反序列化失败）时记录日志并回退到本地静态模型表（`rate_multiplier` 全为 `None`）。
+    /// 反序列化失败）时记录日志并回退到官方 CLI 动态目录（`rate_multiplier` 全为 `None`）。
     pub async fn list_admin_models(&self) -> Vec<super::types::AdminModelItem> {
         match self.token_manager.list_available_models().await {
             Ok(resp) => resp.models.iter().map(live_model_to_admin_item).collect(),
             Err(e) => {
-                tracing::warn!("获取实时支持模型列表失败，回退到本地静态模型表: {}", e);
+                tracing::warn!("获取实时支持模型列表失败，回退到 CLI 动态目录: {}", e);
                 crate::anthropic::handlers::build_model_list()
                     .into_iter()
                     .map(fallback_model_to_admin_item)

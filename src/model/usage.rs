@@ -140,8 +140,8 @@ fn get_k_ref(model: &str) -> f64 {
     {
         // 旧 opus 4.5/4.6（实测 4.6 ≈ 1.90）
         1.90
-    } else if m.contains("opus") || m.contains("fable") {
-        // 未知 opus / fable 兜底沿用最新档
+    } else if m.contains("opus") {
+        // 未知 opus 兜底沿用最新档
         2.36
     } else if m.contains("sonnet-5") || m.contains("sonnet.5") {
         // claude-sonnet-5: Rate = 1.3 Credit，与 sonnet-4.5/4.6 同档（实测确认）

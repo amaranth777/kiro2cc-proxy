@@ -183,310 +183,31 @@ pub async fn get_models() -> impl IntoResponse {
     })
 }
 
-/// 构建可用模型列表（供 get_models 和 get_model 共用）
+/// 构建可用模型目录（供 get_models 和 get_model 共用）。
+///
+/// 官方 Kiro CLI 是唯一模型真相：发现失败时宁可返回空目录，也不能用过期
+/// 静态表宣称模型可用。历史模型名只保留在请求转换中作为别名。
 pub(crate) fn build_model_list() -> Vec<Model> {
-    let mut models = vec![
-        // === 旧版模型 ID（兼容旧版 Claude Code 客户端） ===
-        // 这些旧 ID 在 map_model() 中会被正确映射到对应的 Kiro 模型
-        Model {
-            id: "claude-3-5-sonnet-20241022".to_string(),
-            object: "model".to_string(),
-            created: 1729555200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3.5 Sonnet".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-        Model {
-            id: "claude-3-5-haiku-20241022".to_string(),
-            object: "model".to_string(),
-            created: 1729555200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3.5 Haiku".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-        Model {
-            id: "claude-3-opus-20240229".to_string(),
-            object: "model".to_string(),
-            created: 1709164800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3 Opus".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-        Model {
-            id: "claude-3-haiku-20240307".to_string(),
-            object: "model".to_string(),
-            created: 1709769600,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3 Haiku".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-        Model {
-            id: "claude-3-sonnet-20240229".to_string(),
-            object: "model".to_string(),
-            created: 1709164800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3 Sonnet".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-        // === Claude 4.x 过渡期模型 ID ===
-        Model {
-            id: "claude-sonnet-4-20250514".to_string(),
-            object: "model".to_string(),
-            created: 1747180800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-        Model {
-            id: "claude-opus-4-20250514".to_string(),
-            object: "model".to_string(),
-            created: 1747180800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-        // === 当前主力模型 ===
-        Model {
-            id: "claude-sonnet-4-5-20250929".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
+    models_from_discovery(super::model_catalog::discover_models())
+}
 
-        Model {
-            id: "claude-opus-4-5-20251101".to_string(),
+fn models_from_discovery(
+    discovered: Option<Vec<super::model_catalog::UpstreamModel>>,
+) -> Vec<Model> {
+    discovered
+        .unwrap_or_default()
+        .into_iter()
+        .map(|upstream| Model {
+            id: upstream.id.clone(),
             object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-
-        Model {
-            id: "claude-sonnet-4-6".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-
-        Model {
-            id: "claude-sonnet-5".to_string(),
-            object: "model".to_string(),
-            created: 1777000000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-
-        Model {
-            id: "claude-sonnet-5".to_string(),
-            object: "model".to_string(),
-            created: 1775600000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-            context_length: 750_000,
-        },
-
-        Model {
-            id: "claude-opus-4-6".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-
-        Model {
-            id: "claude-opus-4-7".to_string(),
-            object: "model".to_string(),
-            created: 1773000000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-
-        Model {
-            id: "claude-opus-4-8".to_string(),
-            object: "model".to_string(),
-            created: 1775600000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-
-        Model {
-            id: "claude-fable-5".to_string(),
-            object: "model".to_string(),
-            created: 1772582400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Fable 5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-
-        Model {
-            id: "claude-haiku-4-5-20251001".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-
-        // === 非 Claude 模型 ===
-        Model {
-            id: "auto".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
+            created: 0,
             owned_by: "kiro".to_string(),
-            display_name: "Auto (智能路由)".to_string(),
+            display_name: upstream.id,
             model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 750_000,
-        },
-        Model {
-            id: "deepseek-3.2".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "deepseek".to_string(),
-            display_name: "DeepSeek 3.2".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 128_000,
-        },
-        Model {
-            id: "glm-5".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "glm".to_string(),
-            display_name: "GLM-5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 128_000,
-        },
-        Model {
-            id: "minimax-m2.5".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "minimax".to_string(),
-            display_name: "MiniMax M2.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 1_000_000,
-        },
-        Model {
-            id: "minimax-m2.1".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "minimax".to_string(),
-            display_name: "MiniMax M2.1".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 1_000_000,
-        },
-        Model {
-            id: "qwen3-coder-next".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "qwen".to_string(),
-            display_name: "Qwen3 Coder Next".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 750_000,
-            context_length: 128_000,
-        },
-        Model {
-            id: "gpt-5.6-sol".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "openai".to_string(),
-            display_name: "GPT-5.6 Sol".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: 272000,
-        },
-        Model {
-            id: "gpt-5.6-terra".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "openai".to_string(),
-            display_name: "GPT-5.6 Terra".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: 272000,
-        },
-        Model {
-            id: "gpt-5.6-luna".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "openai".to_string(),
-            display_name: "GPT-5.6 Luna".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: 272000,
-        },
-    ];
-
-    if let Some(discovered) = super::model_catalog::discover_models() {
-        models.retain(|model| {
-            model.id.starts_with("claude-")
-                || model.id.starts_with("gpt-5.6-")
-                || model.id == "auto"
-        });
-        for upstream in discovered {
-            if models.iter().any(|model| model.id == upstream.id) {
-                continue;
-            }
-            models.push(Model {
-                id: upstream.id.clone(),
-                object: "model".to_string(),
-                created: 0,
-                owned_by: "kiro".to_string(),
-                display_name: upstream.id,
-                model_type: "chat".to_string(),
-                max_tokens: upstream.context_length,
-                context_length: upstream.context_length,
-            });
-        }
-    }
-    models
-
+            max_tokens: upstream.context_length,
+            context_length: upstream.context_length,
+        })
+        .collect()
 }
 
 /// GET /v1/models/:model_id
@@ -643,12 +364,13 @@ pub async fn post_messages(
     // 必须在 count_all_tokens 消费 payload 之前先借用计算。
     let prefix_estimated_tokens = {
         let n = payload.messages.len();
-        let prior: &[_] = if n > 0 { &payload.messages[..n - 1] } else { &[] };
-        token::count_prefix_tokens(
-            payload.system.as_deref(),
-            prior,
-            payload.tools.as_deref(),
-        ) as i32
+        let prior: &[_] = if n > 0 {
+            &payload.messages[..n - 1]
+        } else {
+            &[]
+        };
+        token::count_prefix_tokens(payload.system.as_deref(), prior, payload.tools.as_deref())
+            as i32
     };
 
     // 估算输入 tokens
@@ -1431,12 +1153,13 @@ pub async fn post_messages_cc(
     // 估算"缓存前缀" token 数（与 post_messages 同口径，先借用后消费）
     let prefix_estimated_tokens = {
         let n = payload.messages.len();
-        let prior: &[_] = if n > 0 { &payload.messages[..n - 1] } else { &[] };
-        token::count_prefix_tokens(
-            payload.system.as_deref(),
-            prior,
-            payload.tools.as_deref(),
-        ) as i32
+        let prior: &[_] = if n > 0 {
+            &payload.messages[..n - 1]
+        } else {
+            &[]
+        };
+        token::count_prefix_tokens(payload.system.as_deref(), prior, payload.tools.as_deref())
+            as i32
     };
 
     // 估算输入 tokens
@@ -1695,47 +1418,26 @@ fn create_buffered_sse_stream(
 mod tests {
     use super::*;
 
-    fn find_by_id(id: &str) -> Option<Model> {
-        build_model_list().into_iter().find(|m| m.id == id)
+    #[test]
+    fn discovered_catalog_does_not_include_static_models() {
+        let models =
+            models_from_discovery(Some(vec![super::super::model_catalog::UpstreamModel {
+                id: "claude-sonnet-5".to_string(),
+                context_length: 1_000_000,
+                description: "live".to_string(),
+                rate_multiplier: None,
+                thinking: false,
+            }]));
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "claude-sonnet-5");
+        assert_eq!(models[0].context_length, 1_000_000);
+        assert!(models.iter().all(|model| model.id != "claude-fable-5"));
     }
 
     #[test]
-    fn test_opus_4_6_max_tokens_is_128k() {
-        let m = find_by_id("claude-opus-4-6").expect("claude-opus-4-6 缺失");
-        assert_eq!(m.max_tokens, 750_000);
-
-    }
-
-    #[test]
-    fn test_fable_5_present() {
-        let m = find_by_id("claude-fable-5").expect("claude-fable-5 应存在");
-        assert_eq!(m.max_tokens, 750_000);
-        assert_eq!(m.owned_by, "anthropic");
-        assert_eq!(m.object, "model");
-        assert_eq!(m.model_type, "chat");
-        assert_eq!(m.display_name, "Claude Fable 5");
-    }
-
-
-
-    #[test]
-    fn test_haiku_4_5_max_tokens_unchanged() {
-        // 回归：haiku-4-5 max_tokens 维持 64000
-        let m = find_by_id("claude-haiku-4-5-20251001").expect("haiku 条目缺失");
-        assert_eq!(m.max_tokens, 750_000);
-    }
-
-    #[test]
-    fn test_opus_4_7_4_8_max_tokens_unchanged() {
-        // 回归
-        assert_eq!(find_by_id("claude-opus-4-7").unwrap().max_tokens, 750_000);
-        assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 750_000);
-    }
-
-    #[test]
-    fn test_sonnet_4_6_max_tokens_unchanged() {
-        // 回归
-        assert_eq!(find_by_id("claude-sonnet-4-6").unwrap().max_tokens, 750_000);
+    fn missing_discovery_returns_no_models() {
+        assert!(models_from_discovery(None).is_empty());
     }
 
     #[test]

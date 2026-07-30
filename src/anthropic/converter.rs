@@ -427,7 +427,7 @@ fn normalize_system_for_cache_id(system: &str) -> String {
 
     // 状态机：是否正在跳过某个动态块
     let mut skip_session_context = false; // ## Current Session Context 块
-    let mut skip_memory_fence = false;    // ══════ 围栏内的 MEMORY/USER PROFILE 块
+    let mut skip_memory_fence = false; // ══════ 围栏内的 MEMORY/USER PROFILE 块
 
     while let Some(line) = lines.next() {
         // ── 1. ══════ 围栏：MEMORY / USER PROFILE 块 ──────────────────────────
@@ -539,8 +539,6 @@ pub fn map_model(model: &str) -> Option<String> {
         } else {
             Some("claude-sonnet-4.5".to_string())
         }
-    } else if model_lower.contains("fable") {
-        Some("claude-fable-5".to_string())
     } else if model_lower.contains("opus") {
         if model_lower.contains("opus-5")
             || model_lower.contains("opus.5")
@@ -1995,7 +1993,10 @@ mod tests {
         ] {
             assert_eq!(map_model(model), Some("claude-opus-5".to_string()));
         }
-        assert_eq!(map_model("claude-opus-4-8"), Some("claude-opus-4.8".to_string()));
+        assert_eq!(
+            map_model("claude-opus-4-8"),
+            Some("claude-opus-4.8".to_string())
+        );
     }
 
     #[test]
@@ -2004,8 +2005,14 @@ mod tests {
         let main = "You are the main conversation system prompt.";
         let title = "Generate a concise title as JSON.";
 
-        assert_eq!(history_cache_key(session, main), history_cache_key(session, main));
-        assert_ne!(history_cache_key(session, main), history_cache_key(session, title));
+        assert_eq!(
+            history_cache_key(session, main),
+            history_cache_key(session, main)
+        );
+        assert_ne!(
+            history_cache_key(session, main),
+            history_cache_key(session, title)
+        );
     }
 
     #[test]
@@ -2314,7 +2321,6 @@ mod tests {
             "Hello, explain Rust lifetimes."
         );
     }
-
 
     #[test]
     fn test_determine_chat_trigger_type() {
@@ -3186,10 +3192,7 @@ mod tests {
                 Message::Assistant(_) => 0,
             })
             .sum();
-        assert_eq!(
-            history_images, 0,
-            "历史图片不能每轮重复发送 base64"
-        );
+        assert_eq!(history_images, 0, "历史图片不能每轮重复发送 base64");
         let history_text = state
             .history
             .iter()
@@ -3319,12 +3322,8 @@ mod tests {
     }
 
     #[test]
-    fn test_map_model_fable_routes_to_kiro_fable() {
-        assert_eq!(
-            map_model("claude-fable-5"),
-            Some("claude-fable-5".to_string())
-        );
-
+    fn test_fable_is_rejected_before_upstream_request() {
+        assert!(map_model("claude-fable-5").is_none());
     }
 
     #[test]
