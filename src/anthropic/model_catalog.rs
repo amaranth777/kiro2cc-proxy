@@ -4,6 +4,7 @@
 //! Discovery is deliberately isolated from request handling and cached so a
 //! slow or unavailable CLI cannot block every `/v1/models` request.
 
+use crate::kiro::model::available_models::AvailableModelsResponse;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -57,6 +58,7 @@ struct KiroModel {
 #[derive(Debug)]
 struct CacheEntry {
     loaded_at: Instant,
+    ttl: Duration,
     models: Option<Vec<UpstreamModel>>,
 }
 
@@ -66,6 +68,7 @@ fn cache() -> &'static Mutex<CacheEntry> {
     CACHE.get_or_init(|| {
         Mutex::new(CacheEntry {
             loaded_at: Instant::now() - DEFAULT_TTL,
+            ttl: DEFAULT_TTL,
             models: None,
         })
     })
@@ -74,6 +77,71 @@ fn cache() -> &'static Mutex<CacheEntry> {
 /// Discover the current upstream model list, using a short-lived process cache.
 pub fn discover_models() -> Option<Vec<UpstreamModel>> {
     discover_models_with_ttl(DEFAULT_TTL)
+}
+
+/// Convert the authenticated ListAvailableModels response into the catalog
+/// exposed by the compatibility API. This is the primary discovery path; the
+/// external CLI remains only as a fallback for older deployments.
+pub(crate) fn models_from_available_response(
+    response: AvailableModelsResponse,
+) -> Vec<UpstreamModel> {
+    visible_models(
+        response
+            .models
+            .into_iter()
+            .filter_map(|model| {
+                let id = model.model_id.trim().to_string();
+                if id.is_empty() {
+                    return None;
+                }
+                let context_length = i32::try_from(model.token_limits.max_input_tokens)
+                    .ok()
+                    .filter(|value| *value > 0)
+                    .or_else(|| fallback_context_length(&id))
+                    .unwrap_or(750_000);
+                let description = if model.model_name.trim().is_empty() {
+                    id.clone()
+                } else {
+                    model.model_name
+                };
+                Some(UpstreamModel {
+                    id,
+                    context_length,
+                    description,
+                    rate_multiplier: model.rate_multiplier,
+                    thinking: false,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Keep authenticated discovery results in the same cache consumed by model
+/// serialization and the CLI compatibility fallback.
+pub(crate) fn remember_models(models: Vec<UpstreamModel>, ttl: Duration) {
+    if let Ok(mut entry) = cache().lock() {
+        entry.loaded_at = Instant::now();
+        entry.ttl = ttl;
+        entry.models = Some(models);
+    }
+}
+
+/// Return a fresh cache entry without triggering either upstream API or CLI
+/// discovery. The outer option indicates freshness; the inner option preserves
+/// a cached discovery failure so callers do not retry on every request.
+pub(crate) fn cached_models() -> Option<Option<Vec<UpstreamModel>>> {
+    let entry = cache().lock().ok()?;
+    (entry.loaded_at.elapsed() < entry.ttl).then(|| entry.models.clone())
+}
+
+pub(crate) fn available_models_or_else<E>(
+    result: Result<AvailableModelsResponse, E>,
+    fallback: impl FnOnce() -> Option<Vec<UpstreamModel>>,
+) -> (Option<Vec<UpstreamModel>>, Option<E>) {
+    match result {
+        Ok(response) => (Some(models_from_available_response(response)), None),
+        Err(error) => (fallback(), Some(error)),
+    }
 }
 
 /// True when a model is deliberately hidden from automatic discovery.
@@ -98,11 +166,8 @@ pub(crate) fn context_length_for_model(id: &str) -> i32 {
 }
 
 fn discover_models_with_ttl(ttl: Duration) -> Option<Vec<UpstreamModel>> {
-    {
-        let entry = cache().lock().ok()?;
-        if entry.loaded_at.elapsed() < ttl {
-            return entry.models.clone();
-        }
+    if let Some(models) = cached_models() {
+        return models;
     }
 
     // Do not hold the process-wide cache lock while starting an external CLI.
@@ -112,6 +177,7 @@ fn discover_models_with_ttl(ttl: Duration) -> Option<Vec<UpstreamModel>> {
 
     if let Ok(mut entry) = cache().lock() {
         entry.loaded_at = Instant::now();
+        entry.ttl = ttl;
         entry.models = models.clone();
     }
     models
@@ -271,5 +337,49 @@ mod tests {
         assert!(is_blocked_model("claude-sonnet-4.5"));
         assert!(is_blocked_model("auto"));
         assert!(!is_blocked_model("future-model"));
+    }
+
+    #[test]
+    fn maps_authenticated_available_models_response() {
+        let response: AvailableModelsResponse = serde_json::from_value(serde_json::json!({
+            "models": [
+                {
+                    "modelId": "claude-sonnet-4.6",
+                    "modelName": "Claude Sonnet 4.6",
+                    "rateMultiplier": 1.0,
+                    "tokenLimits": {"maxInputTokens": 200000, "maxOutputTokens": 32000}
+                },
+                {"modelId": "future-model", "modelName": "Future Model"},
+                {"modelId": "auto", "modelName": "Auto"}
+            ]
+        }))
+        .unwrap();
+
+        let models = models_from_available_response(response);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "claude-sonnet-4.6");
+        assert_eq!(models[0].context_length, 200_000);
+        assert_eq!(models[0].description, "Claude Sonnet 4.6");
+        assert_eq!(models[1].id, "future-model");
+        assert_eq!(models[1].context_length, 750_000);
+    }
+
+    #[test]
+    fn falls_back_when_authenticated_model_discovery_fails() {
+        let fallback = vec![UpstreamModel {
+            id: "linux-cli-model".to_string(),
+            context_length: 123_000,
+            description: "CLI fallback".to_string(),
+            rate_multiplier: None,
+            thinking: false,
+        }];
+
+        let (models, error) = available_models_or_else(
+            Err::<AvailableModelsResponse, _>("upstream unavailable"),
+            || Some(fallback.clone()),
+        );
+
+        assert_eq!(models, Some(fallback));
+        assert_eq!(error, Some("upstream unavailable"));
     }
 }

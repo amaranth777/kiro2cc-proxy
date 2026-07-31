@@ -174,13 +174,38 @@ fn parse_messages_request(body: &[u8]) -> Result<MessagesRequest, Response> {
 /// GET /v1/models
 ///
 /// 返回可用的模型列表
-pub async fn get_models() -> impl IntoResponse {
+pub async fn get_models(State(state): State<AppState>) -> impl IntoResponse {
     tracing::info!("Received GET /v1/models request");
 
     Json(ModelsResponse {
         object: "list".to_string(),
-        data: build_model_list(),
+        data: load_model_list(&state).await,
     })
+}
+
+async fn load_model_list(state: &AppState) -> Vec<Model> {
+    // A successful catalog is reusable across all discovery paths. A cached
+    // CLI failure must not suppress authenticated API discovery, though.
+    if let Some(Some(cached)) = super::model_catalog::cached_models() {
+        return models_from_discovery(Some(cached));
+    }
+
+    let discovered = if let Some(provider) = state.kiro_provider.as_ref() {
+        let ttl = Duration::from_secs(provider.token_manager().config().model_cache_ttl_secs);
+        let (models, error) = super::model_catalog::available_models_or_else(
+            provider.token_manager().list_available_models().await,
+            super::model_catalog::discover_models,
+        );
+        if let Some(error) = error {
+            tracing::warn!(%error, "ListAvailableModels failed; using Kiro CLI discovery fallback");
+        } else if let Some(models) = models.as_ref() {
+            super::model_catalog::remember_models(models.clone(), ttl);
+        }
+        models
+    } else {
+        super::model_catalog::discover_models()
+    };
+    models_from_discovery(discovered)
 }
 
 /// 构建可用模型目录（供 get_models 和 get_model 共用）。
@@ -213,11 +238,14 @@ fn models_from_discovery(
 /// GET /v1/models/:model_id
 ///
 /// 返回指定模型的信息
-pub async fn get_model(axum::extract::Path(model_id): axum::extract::Path<String>) -> Response {
+pub async fn get_model(
+    State(state): State<AppState>,
+    axum::extract::Path(model_id): axum::extract::Path<String>,
+) -> Response {
     tracing::info!(model_id = %model_id, "Received GET /v1/models/:model_id request");
 
     // 复用 get_models 的模型列表，查找匹配的模型
-    let models = build_model_list();
+    let models = load_model_list(&state).await;
     if let Some(model) = models.into_iter().find(|m| m.id == model_id) {
         Json(model).into_response()
     } else {

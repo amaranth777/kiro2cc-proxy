@@ -38,9 +38,8 @@ pub struct AvailableModelInfo {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenLimits {
-    /// 最大输入 token 数（当前仅解析，暂无消费方；保留以匹配上游真实字段结构并纳入反序列化回归测试）
+    /// 最大输入 token 数（用于生成 `/v1/models` 的上下文窗口）
     #[serde(default)]
-    #[allow(dead_code)]
     pub max_input_tokens: u64,
     /// 最大输出 token 数
     #[serde(default)]
