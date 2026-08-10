@@ -950,15 +950,15 @@ async fn handle_non_stream_request(
         "model": model,
         "stop_reason": stop_reason,
         "stop_sequence": null,
-        // 客户端展示缩放（output_tokens 不缩放）；tracker 已写入真实值
+        // 对外上报真实 input/cache 值；output_tokens 仍受上报上限约束
         "usage": {
-            "input_tokens": super::stream::scale_for_client(report_input, model),
+            "input_tokens": report_input,
             "output_tokens": reported_output_tokens,
-            "cache_creation_input_tokens": super::stream::scale_for_client(report_cache_creation, model),
-            "cache_read_input_tokens": super::stream::scale_for_client(report_cache_read, model),
+            "cache_creation_input_tokens": report_cache_creation,
+            "cache_read_input_tokens": report_cache_read,
             "cache_creation": {
-                "ephemeral_5m_input_tokens": super::stream::scale_for_client(report_creation_5m, model),
-                "ephemeral_1h_input_tokens": super::stream::scale_for_client(report_creation_1h, model)
+                "ephemeral_5m_input_tokens": report_creation_5m,
+                "ephemeral_1h_input_tokens": report_creation_1h
             }
         }
     });
