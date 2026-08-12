@@ -316,6 +316,15 @@ fn evict_oldest_if_full<T: Clone>(map: &mut HashMap<String, CacheEntry<T>>) {
 
 static PREV_H0: OnceLock<Mutex<HashMap<String, CacheEntry<String>>>> = OnceLock::new();
 
+/// Separate frozen history[0] entries for request families sharing a session.
+/// Title-generation and main-conversation prompts must not freeze each other.
+fn history_cache_key(session_id: &str, content: &str) -> String {
+    let prefix: String = content.chars().take(512).collect();
+    let mut hasher = Sha256::new();
+    hasher.update(prefix.as_bytes());
+    format!("{session_id}#{:x}", hasher.finalize())
+}
+
 /// 从文本中剥除所有 `<system-reminder>...</system-reminder>` 标签及其内容。
 fn strip_system_reminders(text: &str) -> String {
     const OPEN_TAG: &str = "<system-reminder>";
@@ -407,6 +416,98 @@ fn normalize_billing_header(content: String) -> String {
     result
 }
 
+/// ⚠️ HIGH-RISK: Hermes-specific system prompt normalization for cross-session cache sharing.
+///
+/// 用途：让拥有相同"语义配置"但不同动态字段的 Hermes session 派生出相同的
+/// conversationId，从而复用 Kiro 服务端 prompt cache，大幅提升缓存命中率。
+///
+/// 原理：Hermes 在 system prompt 里注入了若干 per-session 易变块，导致每次
+/// `derive_fallback_conversation_id` 算出不同的 UUID，Kiro 始终冷启动：
+///   1. `## Current Session Context` 块（含 Source/User/Platform/Delivery 等，每次不同）
+///   2. `Conversation started: <timestamp>` 行
+///   3. `Session ID: / Model: / Provider:` 行
+///   4. MEMORY / USER PROFILE 块（`══════` 围栏，内容随记忆更新而变）
+///
+/// 此函数将上述模式全部 strip，只保留稳定的身份/指令/技能部分参与 hash。
+///
+/// ⚠️ 风险说明：
+///   - 过度 strip 可能导致两个语义不同的 session 共享 conversationId，
+///     Kiro 将复用错误的历史上下文，产生答案污染。
+///   - 本改动仅适用于 Hermes → kiro2cc-proxy 场景，不适合提交上游 PR。
+///
+/// 注意：此函数仅用于 conversationId 派生，不修改实际发送给 Kiro 的内容。
+fn normalize_system_for_cache_id(system: &str) -> String {
+    let mut result = String::with_capacity(system.len());
+    let mut lines = system.lines().peekable();
+
+    // 状态机：是否正在跳过某个动态块
+    let mut skip_session_context = false; // ## Current Session Context 块
+    let mut skip_memory_fence = false; // ══════ 围栏内的 MEMORY/USER PROFILE 块
+
+    while let Some(line) = lines.next() {
+        // ── 1. ══════ 围栏：MEMORY / USER PROFILE 块 ──────────────────────────
+        // 围栏行本身（全部由 ══ 组成，长度 ≥ 20）
+        if line.chars().filter(|&c| c == '═').count() >= 20 {
+            if skip_memory_fence {
+                // 关闭围栏，跳过本行，退出 memory skip 状态
+                skip_memory_fence = false;
+            } else {
+                // 开启围栏，检查下一行是否是 MEMORY/USER PROFILE 标题
+                if let Some(next) = lines.peek() {
+                    let next_trimmed = next.trim();
+                    if next_trimmed.starts_with("MEMORY")
+                        || next_trimmed.starts_with("USER PROFILE")
+                    {
+                        skip_memory_fence = true;
+                        // 跳过本围栏行，后续行在 skip_memory_fence=true 时跳过
+                        continue;
+                    }
+                }
+                // 不是 MEMORY 围栏，正常输出
+                result.push_str(line);
+                result.push('\n');
+            }
+            continue;
+        }
+
+        // 围栏内容行：全部跳过
+        if skip_memory_fence {
+            continue;
+        }
+
+        // ── 2. ## Current Session Context 块 ─────────────────────────────────
+        if line.trim_start().starts_with("## Current Session Context") {
+            skip_session_context = true;
+            continue;
+        }
+        if skip_session_context {
+            // 遇到下一个 ## 标题时退出跳过状态（保留该标题行）
+            if line.trim_start().starts_with("## ") {
+                skip_session_context = false;
+                // 此行是新 section，正常处理（不 continue，走后续逻辑）
+            } else {
+                continue;
+            }
+        }
+
+        // ── 3. 单行易变字段 ───────────────────────────────────────────────────
+        // 格式：`Conversation started: xxx` / `Session ID: xxx` / `Model: xxx` / `Provider: xxx`
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("Conversation started:")
+            || trimmed.starts_with("Session ID:")
+            || trimmed.starts_with("Model:")
+            || trimmed.starts_with("Provider:")
+        {
+            continue;
+        }
+
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    result
+}
+
 /// 模型映射：将 Anthropic 模型名映射到 Kiro 模型 ID
 ///
 /// 按照用户要求：
@@ -422,8 +523,14 @@ pub fn map_model(model: &str) -> Option<String> {
     if model_lower.contains("sonnet") {
         if model_lower.contains("4-6") || model_lower.contains("4.6") {
             Some("claude-sonnet-4.6".to_string())
-        } else if model_lower.contains("sonnet-5") || model_lower.contains("sonnet.5") {
-            // claude-sonnet-5: Max Input 1M, Max Output 64K, Rate 1.3 Credit（与 sonnet-4.x 同档）
+        } else if model_lower.contains("sonnet-5")
+            || model_lower.contains("sonnet.5")
+            || model_lower.contains("sonnet-4-7")
+            || model_lower.contains("sonnet-4.7")
+        {
+            // Kiro 后端上线的 Sonnet 5，真实 ID 为纯横线版 claude-sonnet-5
+            // （点号版 claude-sonnet-5.0 无效）。thinking 走 additionalModelRequestFields。
+            // 注意锚点必须是完整模型变体，不能用裸 "-5"，避免误命中旧模型。
             Some("claude-sonnet-5".to_string())
         } else if model_lower.contains("4-5") || model_lower.contains("4.5") {
             Some("claude-sonnet-4.5".to_string())
@@ -623,10 +730,14 @@ fn derive_fallback_conversation_id(req: &MessagesRequest) -> Option<String> {
     if system_seed.is_empty() && tool_names.is_empty() {
         return None;
     }
-    // 仅取 system 前 4096 字符，避免超长 prompt 导致 hash 计算过慢
-    let system_truncated: &str = match system_seed.char_indices().nth(4096) {
-        Some((idx, _)) => &system_seed[..idx],
-        None => &system_seed,
+    // ⚠️ HIGH-RISK: 归一化 system prompt，strip Hermes per-session 易变块，
+    // 使相同语义配置的不同 session 派生出相同 conversationId，提升跨会话缓存命中率。
+    let system_normalized = normalize_system_for_cache_id(&system_seed);
+
+    // 仅取归一化后前 4096 字符，避免超长 prompt 导致 hash 计算过慢
+    let system_truncated: &str = match system_normalized.char_indices().nth(4096) {
+        Some((idx, _)) => &system_normalized[..idx],
+        None => &system_normalized,
     };
     let mut hasher = Sha256::new();
     hasher.update(b"fallback-conversation:");
@@ -711,16 +822,31 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
 
     // 3. 生成会话 ID 和代理 ID
     // 优先级：
-    //   1. metadata.user_id 中的 session UUID（Claude Code 标准格式）
-    //   2. system + 工具名集合的 SHA-256 派生（让无 metadata 的第三方客户端也能 sticky）
-    //   3. 完全随机 UUID（仅当无 system 也无工具时）
-    let conversation_id = req
-        .metadata
-        .as_ref()
-        .and_then(|m| m.user_id.as_ref())
-        .and_then(|user_id| extract_session_id(user_id))
-        .or_else(|| derive_fallback_conversation_id(req))
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    //   1. 无 history 的单轮请求（cron job / subagent）→ system+tools SHA-256 派生稳定 ID
+    //      相同 system prompt 的单轮请求共享同一 conversationId，复用 Kiro 服务端 prompt cache
+    //   2. 有 history 的多轮请求 → metadata.user_id 中的 session UUID（Claude Code 标准格式）
+    //   3. system + 工具名集合的 SHA-256 派生（无 metadata 的第三方客户端）
+    //   4. 完全随机 UUID（仅当无 system 也无工具时）
+    let is_single_turn = messages.len() <= 1; // 只有当前 user 消息，无 history
+    let conversation_id = if is_single_turn {
+        // 单轮请求：优先用 system 派生，让所有 cron/subagent 落在同一 session
+        derive_fallback_conversation_id(req)
+            .or_else(|| {
+                req.metadata
+                    .as_ref()
+                    .and_then(|m| m.user_id.as_ref())
+                    .and_then(|user_id| extract_session_id(user_id))
+            })
+            .unwrap_or_else(|| Uuid::new_v4().to_string())
+    } else {
+        // 多轮请求：优先保持 metadata session UUID，保证对话连续性
+        req.metadata
+            .as_ref()
+            .and_then(|m| m.user_id.as_ref())
+            .and_then(|user_id| extract_session_id(user_id))
+            .or_else(|| derive_fallback_conversation_id(req))
+            .unwrap_or_else(|| Uuid::new_v4().to_string())
+    };
     // agentContinuationId 基于 conversationId 派生，保持同一会话内稳定
     // 这样 Kiro 后端能识别连续请求，对历史消息做跨请求 prompt caching
     let agent_continuation_id = derive_agent_continuation_id(&conversation_id);
@@ -1409,7 +1535,10 @@ fn build_additional_model_request_fields(
     req: &MessagesRequest,
     model_id: &str,
 ) -> Option<serde_json::Value> {
-    if model_id.ends_with("4.5") || model_id.starts_with("gpt-") {
+    if !req.model.to_lowercase().starts_with("claude")
+        || model_id.ends_with("4.5")
+        || model_id.starts_with("gpt-")
+    {
         return None;
     }
 
@@ -1417,31 +1546,27 @@ fn build_additional_model_request_fields(
 
     if let Some(t) = &req.thinking {
         let mut thinking_obj = serde_json::Map::new();
-        if t.thinking_type == "enabled" || t.thinking_type == "adaptive" {
-            thinking_obj.insert("type".into(), serde_json::json!("adaptive"));
+        // Kiro 只接受 adaptive/disabled；Anthropic 的 enabled 语义等价转换为 adaptive。
+        let kiro_thinking_type = if t.thinking_type == "enabled" {
+            "adaptive"
         } else {
-            thinking_obj.insert("type".into(), serde_json::json!("disabled"));
-        }
+            t.thinking_type.as_str()
+        };
+        thinking_obj.insert("type".into(), serde_json::json!(kiro_thinking_type));
         fields.insert("thinking".into(), serde_json::Value::Object(thinking_obj));
     }
 
-    let effort = req
-        .output_config
-        .as_ref()
-        .map(|c| c.effort.as_str())
-        .unwrap_or("high");
-    fields.insert(
-        "output_config".into(),
-        serde_json::json!({ "effort": effort }),
-    );
+    if let Some(config) = req.output_config.as_ref() {
+        fields.insert(
+            "output_config".into(),
+            serde_json::json!({ "effort": config.effort }),
+        );
+    }
 
     if req.max_tokens > 0 {
         let cap = model_max_output_tokens(&req.model);
-        let mut capped = req.max_tokens.min(cap);
-        if cap == 128000 {
-            // Kiro 侧 schema 对 opus-4.7/4.8/5 代际强制 max_tokens minimum = 1024
-            capped = capped.max(1024);
-        }
+        // Kiro 后端硬限制：additionalModelRequestFields.max_tokens >= 1024
+        let capped = req.max_tokens.min(cap).max(1024);
         fields.insert("max_tokens".into(), serde_json::json!(capped));
     }
 
@@ -1545,20 +1670,11 @@ fn build_history(
             let final_content = {
                 let cache = PREV_H0.get_or_init(|| Mutex::new(HashMap::new()));
                 let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
-                let h0_key = {
-                    // 用已归一化(cch=0)的 final_content 取前缀：cch 计费哈希每轮都变，
-                    // 若混入指纹会导致同类请求 key 逐轮抖动、冻结永不命中。final_content
-                    // 前 512 字符落在稳定的 agent 提示词前言，gitStatus/currentDate 在尾部
-                    // reminders、cc_version 同会话内恒定，均不影响前缀稳定性。
-                    let prefix: String = final_content.chars().take(512).collect();
-                    let mut hasher = Sha256::new();
-                    hasher.update(prefix.as_bytes());
-                    format!(
-                        "{}#{}",
-                        session_id,
-                        &format!("{:x}", hasher.finalize())[..8]
-                    )
-                };
+                // 用已归一化(cch=0)的 final_content 取前缀：cch 计费哈希每轮都变，
+                // 若混入指纹会导致同类请求 key 逐轮抖动、冻结永不命中。final_content
+                // 前 512 字符落在稳定的 agent 提示词前言，gitStatus/currentDate 在尾部
+                // reminders、cc_version 同会话内恒定，均不影响前缀稳定性。
+                let h0_key = history_cache_key(session_id, &final_content);
                 if let Some(entry) = map.get_mut(&h0_key) {
                     entry.last_used = Instant::now();
                     let frozen = entry.value.clone();
@@ -1663,7 +1779,7 @@ fn merge_user_messages(
     model_id: &str,
 ) -> Result<HistoryUserMessage, ConversionError> {
     let mut content_parts = Vec::new();
-    let mut all_images = Vec::new();
+    let mut historical_image_count = 0usize;
     let mut all_tool_results = Vec::new();
 
     for msg in messages {
@@ -1671,8 +1787,15 @@ fn merge_user_messages(
         if !text.is_empty() {
             content_parts.push(text);
         }
-        all_images.extend(images);
+        historical_image_count += images.len();
         all_tool_results.extend(tool_results);
+    }
+
+    if historical_image_count > 0 {
+        content_parts.push(format!(
+            "[{} prior image(s) omitted from this follow-up request. Do not infer or claim visual details from them; ask the user to upload the image again if those details are needed.]",
+            historical_image_count
+        ));
     }
 
     let content = content_parts.join("\n");
@@ -1686,10 +1809,7 @@ fn merge_user_messages(
     // 保留文本内容，即使有工具结果也不丢弃用户文本
     let mut user_msg = UserMessage::new(&content, model_id);
 
-    if !all_images.is_empty() {
-        user_msg = user_msg.with_images(all_images);
-    }
-
+    // Historical image bytes are intentionally omitted; only the current turn carries images.
     if !all_tool_results.is_empty() {
         let mut ctx = UserInputMessageContext::new();
         ctx = ctx.with_tool_results(all_tool_results);

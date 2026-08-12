@@ -143,6 +143,7 @@ async fn main() {
         auth_type: config.count_tokens_auth_type.clone(),
         proxy: proxy_config,
         tls_backend: config.tls_backend,
+        ca_cert_path: config.ca_cert_path.clone(),
     });
 
     // 初始化 API Key 管理器和用量追踪器（Admin 启用时才加载）
@@ -168,6 +169,14 @@ async fn main() {
             std::process::exit(1);
         });
         let tracker = Arc::new(tracker);
+
+        // 内置固定 Key（兼容客户端写死密钥的场景，如 mihaha 桌面端）：
+        // 幂等注册为一条无限额度、永不过期的子 Key，不影响用户在 Admin UI 里的后续管理
+        if let Some(fixed_key) = config.api_key.as_ref().filter(|k| !k.trim().is_empty()) {
+            if let Err(e) = manager.ensure_fixed_key(fixed_key, "内置固定 Key") {
+                tracing::error!("注册内置固定 Key 失败: {}", e);
+            }
+        }
 
         tracing::info!("API Key 多用户管理已启用");
         (Some(manager), Some(tracker))

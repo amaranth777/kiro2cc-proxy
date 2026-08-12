@@ -1,0 +1,385 @@
+//! Runtime discovery of the models exposed by the official Kiro CLI.
+//!
+//! The CLI is the authoritative source for currently available Kiro models.
+//! Discovery is deliberately isolated from request handling and cached so a
+//! slow or unavailable CLI cannot block every `/v1/models` request.
+
+use crate::kiro::model::available_models::AvailableModelsResponse;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const DEFAULT_TTL: Duration = Duration::from_secs(86400);
+// User policy: hide only explicitly blocked models from automatic discovery.
+// New Kiro CLI models therefore appear without a code update.
+const BLOCKED_MODEL_IDS: &[&str] = &[
+    "auto",
+    "claude-opus-4.5",
+    "claude-sonnet-4.5",
+    "claude-sonnet-4",
+    "claude-haiku-4.5",
+    "deepseek-3.2",
+    "minimax-m2.5",
+    "minimax-m2.1",
+    "glm-5",
+    "qwen3-coder-next",
+];
+// ponytail: bounded external discovery; 15s covers the real kiro-cli startup latency without allowing a hung child to block requests indefinitely.
+const CLI_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpstreamModel {
+    pub id: String,
+    pub context_length: i32,
+    pub description: String,
+    pub rate_multiplier: Option<f64>,
+    pub thinking: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct KiroModelList {
+    models: Vec<KiroModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KiroModel {
+    model_id: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    context_window_tokens: Option<i32>,
+    #[serde(default)]
+    rate_multiplier: Option<f64>,
+}
+
+#[derive(Debug)]
+struct CacheEntry {
+    loaded_at: Instant,
+    ttl: Duration,
+    models: Option<Vec<UpstreamModel>>,
+}
+
+static CACHE: OnceLock<Mutex<CacheEntry>> = OnceLock::new();
+
+fn cache() -> &'static Mutex<CacheEntry> {
+    CACHE.get_or_init(|| {
+        Mutex::new(CacheEntry {
+            loaded_at: Instant::now() - DEFAULT_TTL,
+            ttl: DEFAULT_TTL,
+            models: None,
+        })
+    })
+}
+
+/// Discover the current upstream model list, using a short-lived process cache.
+pub fn discover_models() -> Option<Vec<UpstreamModel>> {
+    discover_models_with_ttl(DEFAULT_TTL)
+}
+
+/// Convert the authenticated ListAvailableModels response into the catalog
+/// exposed by the compatibility API. This is the primary discovery path; the
+/// external CLI remains only as a fallback for older deployments.
+pub(crate) fn models_from_available_response(
+    response: AvailableModelsResponse,
+) -> Vec<UpstreamModel> {
+    visible_models(
+        response
+            .models
+            .into_iter()
+            .filter_map(|model| {
+                let id = model.model_id.trim().to_string();
+                if id.is_empty() {
+                    return None;
+                }
+                let context_length = i32::try_from(model.token_limits.max_input_tokens)
+                    .ok()
+                    .filter(|value| *value > 0)
+                    .or_else(|| fallback_context_length(&id))
+                    .unwrap_or(750_000);
+                let description = if model.model_name.trim().is_empty() {
+                    id.clone()
+                } else {
+                    model.model_name
+                };
+                Some(UpstreamModel {
+                    id,
+                    context_length,
+                    description,
+                    rate_multiplier: model.rate_multiplier,
+                    thinking: false,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Keep authenticated discovery results in the same cache consumed by model
+/// serialization and the CLI compatibility fallback.
+pub(crate) fn remember_models(models: Vec<UpstreamModel>, ttl: Duration) {
+    if let Ok(mut entry) = cache().lock() {
+        entry.loaded_at = Instant::now();
+        entry.ttl = ttl;
+        entry.models = Some(models);
+    }
+}
+
+/// Return a fresh cache entry without triggering either upstream API or CLI
+/// discovery. The outer option indicates freshness; the inner option preserves
+/// a cached discovery failure so callers do not retry on every request.
+pub(crate) fn cached_models() -> Option<Option<Vec<UpstreamModel>>> {
+    let entry = cache().lock().ok()?;
+    (entry.loaded_at.elapsed() < entry.ttl).then(|| entry.models.clone())
+}
+
+pub(crate) fn available_models_or_else<E>(
+    result: Result<AvailableModelsResponse, E>,
+    fallback: impl FnOnce() -> Option<Vec<UpstreamModel>>,
+) -> (Option<Vec<UpstreamModel>>, Option<E>) {
+    match result {
+        Ok(response) => (Some(models_from_available_response(response)), None),
+        Err(error) => (fallback(), Some(error)),
+    }
+}
+
+/// True when a model is deliberately hidden from automatic discovery.
+fn is_blocked_model(id: &str) -> bool {
+    BLOCKED_MODEL_IDS.contains(&id)
+}
+
+pub(crate) fn metadata_for_id(id: &str) -> Option<UpstreamModel> {
+    discover_models()?.into_iter().find(|model| model.id == id)
+}
+
+/// Return the best available context window for a model.
+///
+/// Discovered values win. The small fallback table is only used when the CLI
+/// is unavailable, preserving compatibility with existing callers.
+pub(crate) fn context_length_for_model(id: &str) -> i32 {
+    discover_models()
+        .and_then(|models| models.into_iter().find(|model| model.id == id))
+        .map(|model| model.context_length)
+        .or_else(|| fallback_context_length(id))
+        .unwrap_or(750_000)
+}
+
+fn discover_models_with_ttl(ttl: Duration) -> Option<Vec<UpstreamModel>> {
+    if let Some(models) = cached_models() {
+        return models;
+    }
+
+    // Do not hold the process-wide cache lock while starting an external CLI.
+    let models = run_discovery_command()
+        .and_then(|stdout| parse_models(&stdout).ok())
+        .map(visible_models);
+
+    if let Ok(mut entry) = cache().lock() {
+        entry.loaded_at = Instant::now();
+        entry.ttl = ttl;
+        entry.models = models.clone();
+    }
+    models
+}
+
+fn visible_models(models: Vec<UpstreamModel>) -> Vec<UpstreamModel> {
+    models
+        .into_iter()
+        .filter(|model| !is_blocked_model(&model.id))
+        .collect()
+}
+
+fn run_discovery_command() -> Option<Vec<u8>> {
+    let mut child = Command::new(kiro_cli_path())
+        .args(["chat", "--list-models", "--format", "json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                return child.wait_with_output().ok().map(|output| output.stdout);
+            }
+            Ok(Some(_)) => return None,
+            Ok(None) if started.elapsed() < CLI_TIMEOUT => thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+fn kiro_cli_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("KIRO_CLI_PATH").filter(|value| !value.is_empty()) {
+        return PathBuf::from(path);
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        for path in [
+            PathBuf::from(&home).join(".local/bin/kiro-cli"),
+            PathBuf::from(&home).join(".kiro/bin/kiro-cli"),
+        ] {
+            if path.is_file() {
+                return path;
+            }
+        }
+    }
+
+    PathBuf::from("kiro-cli")
+}
+
+fn parse_models(bytes: &[u8]) -> Result<Vec<UpstreamModel>, serde_json::Error> {
+    let payload: KiroModelList = serde_json::from_slice(bytes)?;
+    Ok(payload
+        .models
+        .into_iter()
+        .filter_map(|model| {
+            let id = model.model_id.trim().to_string();
+            if id.is_empty() {
+                return None;
+            }
+            let context_length = model
+                .context_window_tokens
+                .filter(|value| *value > 0)
+                .or_else(|| fallback_context_length(&id))?;
+            Some(UpstreamModel {
+                id,
+                context_length,
+                description: model.description,
+                rate_multiplier: model.rate_multiplier,
+                // The current upstream manifest does not expose thinking
+                // capability. Never infer it for discovered models.
+                thinking: false,
+            })
+        })
+        .collect())
+}
+
+fn fallback_context_length(id: &str) -> Option<i32> {
+    match id {
+        "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => Some(272_000),
+        "deepseek-3.2" => Some(164_000),
+        "minimax-m2.5" | "minimax-m2.1" => Some(196_000),
+        "glm-5" => Some(200_000),
+        "qwen3-coder-next" => Some(256_000),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_upstream_models_and_defaults_thinking_to_false() {
+        let models = parse_models(
+            br#"{"models":[{"model_id":"glm-5","description":"GLM","context_window_tokens":200000,"rate_multiplier":0.5}]}"#,
+        )
+        .unwrap();
+        assert_eq!(models[0].id, "glm-5");
+        assert_eq!(models[0].context_length, 200000);
+        assert!(!models[0].thinking);
+    }
+
+    #[test]
+    fn uses_known_context_fallback_when_upstream_omits_it() {
+        let models = parse_models(br#"{"models":[{"model_id":"qwen3-coder-next"}]}"#).unwrap();
+        assert_eq!(models[0].context_length, 256000);
+    }
+
+    #[test]
+    fn rejects_invalid_json() {
+        assert!(parse_models(b"not-json").is_err());
+    }
+
+    #[test]
+    fn serializes_metadata_fields() {
+        let model = parse_models(br#"{"models":[{"model_id":"deepseek-3.2"}]}"#).unwrap();
+        let value = serde_json::to_value(&model[0]).unwrap();
+        assert_eq!(value["id"], "deepseek-3.2");
+        assert_eq!(value["context_length"], 164000);
+        assert_eq!(value["thinking"], false);
+    }
+
+    #[test]
+    fn automatic_catalog_hides_only_blocked_models() {
+        let models = [
+            "claude-sonnet-4.6",
+            "claude-sonnet-4.5",
+            "auto",
+            "future-model",
+        ]
+        .into_iter()
+        .map(|id| UpstreamModel {
+            id: id.to_string(),
+            context_length: 1,
+            description: String::new(),
+            rate_multiplier: None,
+            thinking: false,
+        })
+        .collect::<Vec<_>>();
+
+        let visible = visible_models(models);
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].id, "claude-sonnet-4.6");
+        assert_eq!(visible[1].id, "future-model");
+        assert!(is_blocked_model("claude-sonnet-4.5"));
+        assert!(is_blocked_model("auto"));
+        assert!(!is_blocked_model("future-model"));
+    }
+
+    #[test]
+    fn maps_authenticated_available_models_response() {
+        let response: AvailableModelsResponse = serde_json::from_value(serde_json::json!({
+            "models": [
+                {
+                    "modelId": "claude-sonnet-4.6",
+                    "modelName": "Claude Sonnet 4.6",
+                    "rateMultiplier": 1.0,
+                    "tokenLimits": {"maxInputTokens": 200000, "maxOutputTokens": 32000}
+                },
+                {"modelId": "future-model", "modelName": "Future Model"},
+                {"modelId": "auto", "modelName": "Auto"}
+            ]
+        }))
+        .unwrap();
+
+        let models = models_from_available_response(response);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "claude-sonnet-4.6");
+        assert_eq!(models[0].context_length, 200_000);
+        assert_eq!(models[0].description, "Claude Sonnet 4.6");
+        assert_eq!(models[1].id, "future-model");
+        assert_eq!(models[1].context_length, 750_000);
+    }
+
+    #[test]
+    fn falls_back_when_authenticated_model_discovery_fails() {
+        let fallback = vec![UpstreamModel {
+            id: "linux-cli-model".to_string(),
+            context_length: 123_000,
+            description: "CLI fallback".to_string(),
+            rate_multiplier: None,
+            thinking: false,
+        }];
+
+        let (models, error) = available_models_or_else(
+            Err::<AvailableModelsResponse, _>("upstream unavailable"),
+            || Some(fallback.clone()),
+        );
+
+        assert_eq!(models, Some(fallback));
+        assert_eq!(error, Some("upstream unavailable"));
+    }
+}

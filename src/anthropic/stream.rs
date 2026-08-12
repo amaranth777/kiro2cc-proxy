@@ -419,7 +419,7 @@ impl SseStateManager {
         context_usage_percentage: Option<f64>,
         cache_creation_5m_input_tokens: Option<i32>,
         cache_creation_1h_input_tokens: Option<i32>,
-        model: &str,
+        _model: &str,
     ) -> Vec<SseEvent> {
         let mut events = Vec::new();
 
@@ -477,23 +477,13 @@ impl SseStateManager {
             }
 
             let mut usage = serde_json::Map::new();
-            // 客户端展示缩放（output_tokens 不缩放，避免影响 max_tokens 计算）
-            usage.insert(
-                "input_tokens".into(),
-                json!(scale_for_client(input_tokens, model)),
-            );
+            usage.insert("input_tokens".into(), json!(input_tokens));
             usage.insert("output_tokens".into(), json!(output_tokens));
             if let Some(v) = cache_creation_input_tokens {
-                usage.insert(
-                    "cache_creation_input_tokens".into(),
-                    json!(scale_for_client(v, model)),
-                );
+                usage.insert("cache_creation_input_tokens".into(), json!(v));
             }
             if let Some(v) = cache_read_input_tokens {
-                usage.insert(
-                    "cache_read_input_tokens".into(),
-                    json!(scale_for_client(v, model)),
-                );
+                usage.insert("cache_read_input_tokens".into(), json!(v));
             }
             // 与非流式响应对齐：输出 ephemeral 5m/1h 嵌套字段
             if cache_creation_input_tokens.is_some()
@@ -503,17 +493,11 @@ impl SseStateManager {
                 let mut cc = serde_json::Map::new();
                 cc.insert(
                     "ephemeral_5m_input_tokens".into(),
-                    json!(scale_for_client(
-                        cache_creation_5m_input_tokens.unwrap_or(0),
-                        model
-                    )),
+                    json!(cache_creation_5m_input_tokens.unwrap_or(0)),
                 );
                 cc.insert(
                     "ephemeral_1h_input_tokens".into(),
-                    json!(scale_for_client(
-                        cache_creation_1h_input_tokens.unwrap_or(0),
-                        model
-                    )),
+                    json!(cache_creation_1h_input_tokens.unwrap_or(0)),
                 );
                 usage.insert("cache_creation".into(), serde_json::Value::Object(cc));
             }
@@ -546,13 +530,8 @@ impl SseStateManager {
     }
 }
 
-/// 所有模型统一按 100 万 token 上下文窗口计算。
-///
-/// 历史上按模型分支返回 200K/1M；本变更改为统一 1M，与"contextUsage 本地化"决策一致：
-/// final_input_tokens 不再依赖 Kiro `contextUsageEvent` 反算；如需差异化窗口
-/// 可恢复 match 分支。
-pub(crate) fn context_window_for_model(_model: &str) -> i32 {
-    1_000_000
+pub(crate) fn context_window_for_model(model: &str) -> i32 {
+    super::model_catalog::context_length_for_model(model)
 }
 
 /// 空响应判定为「上下文过大」的输入 token 阈值（取窗口的 28%）。
@@ -574,26 +553,6 @@ const NEAR_EMPTY_OUTPUT_THRESHOLD: i32 = 30;
 /// 检测工具对 output_tokens 总和 > 800 扣 15 分，> 500 扣 8 分。
 /// 限制上报值在安全范围内。thinking 内容不应计入对外报告的 output_tokens。
 const OUTPUT_TOKENS_REPORT_CAP: i32 = 380;
-
-/// 返回给客户端的 token 类字段缩放系数。
-///
-/// 仅影响给客户端（如 Claude Code）看到的 usage.input_tokens / cache_* 字段。
-/// 内部计费与 usage_tracker 入库仍写入真实值，admin/user UI 显示不受影响。
-///
-/// Claude Code 4.6 窗口 200K，85% 触发 compact = 170K（原假设 83%，按实测更新）。
-/// 缩放系数按比例上调以保持原真实触发点不变：0.65 × (85/83) ≈ 0.6657。
-/// 真实 255K+ × 0.6657 ≈ 170K+ → 触发 compact。
-///
-/// 统一应用于所有模型，不再按窗口代际区分（原 opus-4.7/4.8/5 大窗口分支已合并）。
-const CLIENT_TOKEN_DISPLAY_SCALE: f64 = 0.6657;
-
-/// 对客户端展示用的 token 值缩放（向上取整保证非零）。
-pub(crate) fn scale_for_client(n: i32, _model: &str) -> i32 {
-    if n <= 0 {
-        return n.max(0);
-    }
-    ((n as f64) * CLIENT_TOKEN_DISPLAY_SCALE).ceil() as i32
-}
 
 fn cap_input_tokens(context_input_tokens: i32, _local_estimate: i32, model: &str) -> i32 {
     let cap = context_window_for_model(model);
@@ -740,10 +699,10 @@ impl StreamContext {
                 "stop_reason": null,
                 "stop_sequence": null,
                 "usage": {
-                    "input_tokens": scale_for_client(usage.input_tokens, &self.model),
+                    "input_tokens": usage.input_tokens,
                     "output_tokens": 1,
-                    "cache_creation_input_tokens": scale_for_client(usage.cache_creation_input_tokens, &self.model),
-                    "cache_read_input_tokens": scale_for_client(usage.cache_read_input_tokens, &self.model)
+                    "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+                    "cache_read_input_tokens": usage.cache_read_input_tokens
                 }
             }
         })
@@ -1658,18 +1617,15 @@ impl BufferedStreamContext {
                 )
             };
 
-        // 更正 message_start 事件中的 usage 字段（客户端展示缩放）
+        // 更正 message_start 事件中的 usage 字段
         for event in &mut self.event_buffer {
             if event.event == "message_start"
                 && let Some(message) = event.data.get_mut("message")
                 && let Some(usage) = message.get_mut("usage")
             {
-                usage["input_tokens"] =
-                    serde_json::json!(scale_for_client(report_input, &self.inner.model));
-                usage["cache_creation_input_tokens"] =
-                    serde_json::json!(scale_for_client(report_cache_creation, &self.inner.model));
-                usage["cache_read_input_tokens"] =
-                    serde_json::json!(scale_for_client(report_cache_read, &self.inner.model));
+                usage["input_tokens"] = serde_json::json!(report_input);
+                usage["cache_creation_input_tokens"] = serde_json::json!(report_cache_creation);
+                usage["cache_read_input_tokens"] = serde_json::json!(report_cache_read);
             }
         }
 
@@ -1714,60 +1670,6 @@ fn estimate_tokens(text: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_scale_for_client_basic() {
-        // 默认模型（非 4.7/4.8）：× 0.6657
-        assert_eq!(scale_for_client(100_000, "claude-opus-4-6"), 66_570);
-        assert_eq!(scale_for_client(85_000, "claude-sonnet-4-6"), 56_585);
-        // sonnet-5 与 sonnet-4.6 同档，不归入大窗口分支
-        assert_eq!(scale_for_client(100_000, "claude-sonnet-5"), 66_570);
-        assert_eq!(scale_for_client(0, "claude-opus-4-6"), 0);
-        assert_eq!(scale_for_client(1, "claude-opus-4-6"), 1);
-        assert_eq!(scale_for_client(-100, "claude-opus-4-6"), 0);
-    }
-
-    #[test]
-    fn test_scale_for_client_opus_4_7_4_8_unified() {
-        // opus-4.7/4.8 已与其他模型统一为 × 0.6657（不再区分大窗口分支）
-        assert_eq!(scale_for_client(100_000, "claude-opus-4-7"), 66_570);
-        assert_eq!(scale_for_client(100_000, "claude-opus-4-8"), 66_570);
-        assert_eq!(scale_for_client(200_000, "claude-opus-4-7"), 133_140);
-        assert_eq!(scale_for_client(1, "claude-opus-4-8"), 1);
-        assert_eq!(scale_for_client(0, "claude-opus-4-7"), 0);
-    }
-
-    #[test]
-    fn test_scale_for_client_opus_5_unified() {
-        // opus-5 系列同样统一为 × 0.6657
-        assert_eq!(scale_for_client(100_000, "claude-opus-5"), 66_570);
-        assert_eq!(scale_for_client(100_000, "claude-opus-5-thinking"), 66_570);
-        assert_eq!(scale_for_client(200_000, "Claude-Opus-5"), 133_140);
-        assert_eq!(scale_for_client(1, "claude-opus-5"), 1);
-        // opus-5 空格别名（如客户端发送 "Claude Opus 5"）
-        assert_eq!(scale_for_client(100_000, "Claude Opus 5"), 66_570);
-        // opus-5 点号别名（如客户端发送 "claude-opus.5"）
-        assert_eq!(scale_for_client(100_000, "claude-opus.5"), 66_570);
-
-        // 回归：sonnet-5 / opus-4.5 / opus-4.6 / opus-4.7 / opus-4.8 均同档
-        assert_eq!(scale_for_client(100_000, "claude-sonnet-5"), 66_570);
-        assert_eq!(scale_for_client(100_000, "claude-opus-4-5"), 66_570);
-        assert_eq!(scale_for_client(100_000, "claude-opus-4-6"), 66_570);
-        assert_eq!(scale_for_client(100_000, "claude-opus-4-7"), 66_570);
-        assert_eq!(scale_for_client(100_000, "claude-opus-4-8"), 66_570);
-    }
-
-    #[test]
-    fn test_scale_for_client_non_round() {
-        // 11 × 0.6657 = ceil(7.3227) = 8
-        assert_eq!(scale_for_client(11, "claude-opus-4-6"), 8);
-        assert_eq!(scale_for_client(11, "claude-opus-4-7"), 8);
-        // i32::MAX 不溢出
-        let r = scale_for_client(i32::MAX, "claude-opus-4-6");
-        assert!(r > 0 && r < i32::MAX);
-        let r2 = scale_for_client(i32::MAX, "claude-opus-4-8");
-        assert!(r2 > 0 && r2 < i32::MAX);
-    }
 
     #[test]
     fn test_sse_event_format() {
@@ -2644,38 +2546,37 @@ mod tests {
 
     #[test]
     fn test_context_window_opus_4_6_is_1m() {
-        assert_eq!(context_window_for_model("claude-opus-4-6"), 1_000_000);
+        // 测试环境无 kiro-cli，走 fallback_context_length 未命中已知短表 → 750K 兜底
+        assert_eq!(context_window_for_model("claude-opus-4-6"), 750_000);
         assert_eq!(
             context_window_for_model("claude-opus-4-6-thinking"),
-            1_000_000
+            750_000
         );
     }
 
     #[test]
     fn test_context_window_fable_5_is_1m() {
-        assert_eq!(context_window_for_model("claude-fable-5"), 1_000_000);
+        assert_eq!(context_window_for_model("claude-fable-5"), 750_000);
         assert_eq!(
             context_window_for_model("claude-fable-5-thinking"),
-            1_000_000
+            750_000
         );
     }
 
     #[test]
     fn test_context_window_all_models_unified_to_1m() {
-        // contextUsage 本地化后所有模型统一返回 1M
         assert_eq!(
             context_window_for_model("claude-haiku-4-5-20251001"),
-            1_000_000
+            750_000
         );
-        assert_eq!(context_window_for_model("unknown-model"), 1_000_000);
-        assert_eq!(context_window_for_model(""), 1_000_000);
+        assert_eq!(context_window_for_model("unknown-model"), 750_000);
+        assert_eq!(context_window_for_model(""), 750_000);
     }
 
     #[test]
     fn test_context_window_existing_branches_unchanged() {
-        // 回归：4-7 / 4-8 / sonnet-4-6 仍为 1M
-        assert_eq!(context_window_for_model("claude-opus-4-7"), 1_000_000);
-        assert_eq!(context_window_for_model("claude-opus-4-8"), 1_000_000);
-        assert_eq!(context_window_for_model("claude-sonnet-4-6"), 1_000_000);
+        assert_eq!(context_window_for_model("claude-opus-4-7"), 750_000);
+        assert_eq!(context_window_for_model("claude-opus-4-8"), 750_000);
+        assert_eq!(context_window_for_model("claude-sonnet-4-6"), 750_000);
     }
 }

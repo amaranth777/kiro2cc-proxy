@@ -115,13 +115,13 @@ pub struct KiroCredentials {
     #[serde(default)]
     pub disabled: bool,
 
-    /// 账号级端点首选项（多端点 LB 使用）
+    /// 账号级端点集合（显式启用多端点 LB）
     ///
-    /// - 未配置 / 空 → 使用全部 4 个端点（按 `Endpoint::default_order`）
-    /// - 仅声明首选端点 → 首选在首 + 剩余端点按默认顺序去重追加
+    /// - 未配置 / 空 → 保持历史行为，仅使用 `ide`
+    /// - 配置 → 仅使用声明的端点，按声明顺序去重后轮询
     /// - 非法值（如 `"invalid_endpoint"`）→ serde 反序列化时忽略该项，等价于未配置
     ///
-    /// 示例：`["runtime", "codewhisperer"]` → `[Runtime, Codewhisperer, Ide, Amazonq]`
+    /// 示例：`["runtime", "codewhisperer"]` → `[Runtime, Codewhisperer]`
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub endpoint: Option<Vec<crate::kiro::endpoint::EndpointName>>,
 }
@@ -288,24 +288,22 @@ impl KiroCredentials {
             .unwrap_or(config.effective_api_region())
     }
 
-    /// 获取账号的多端点列表（多端点 LB 使用）
+    /// 获取账号启用的端点列表（多端点 LB 使用）
     ///
-    /// - 未配置 / `None` / 空 Vec → 全部 4 个端点（按 `Endpoint::default_order`）
-    /// - 配置 → 首选端点在前 + 剩余端点按默认顺序去重追加
+    /// - 未配置 / `None` / 空 Vec → 保持历史行为，仅 `ide`
+    /// - 配置 → 仅使用声明的端点，按声明顺序去重
     pub fn effective_endpoints(&self, region: &str) -> Vec<crate::kiro::endpoint::Endpoint> {
         use crate::kiro::endpoint::{Endpoint, EndpointName};
 
-        let defaults: Vec<EndpointName> = Endpoint::default_order().to_vec();
-
-        let preferred = match &self.endpoint {
+        let selected = match &self.endpoint {
             Some(v) if !v.is_empty() => v.clone(),
-            _ => return Endpoint::all(region).to_vec(),
+            _ => vec![EndpointName::Ide],
         };
 
-        // 去重（保留首次出现顺序）+ 过滤未知 enum 变体（serde 已保证，理论不可达）
+        // 去重并保留凭据声明的首次出现顺序。
         let mut seen = std::collections::HashSet::new();
-        let mut result: Vec<EndpointName> = Vec::with_capacity(4);
-        for name in preferred.into_iter().chain(defaults) {
+        let mut result = Vec::with_capacity(selected.len());
+        for name in selected {
             if seen.insert(name) {
                 result.push(name);
             }
@@ -1044,29 +1042,30 @@ mod tests {
     use crate::kiro::endpoint::EndpointName;
 
     #[test]
-    fn test_effective_endpoints_unset_returns_all_in_default_order() {
+    fn test_effective_endpoints_unset_preserves_ide_only_behavior() {
         let creds = KiroCredentials::default();
         let eps = creds.effective_endpoints("us-east-1");
-        assert_eq!(eps.len(), 4);
-        assert_eq!(eps[0].name, EndpointName::Ide);
-        assert_eq!(eps[1].name, EndpointName::Runtime);
-        assert_eq!(eps[2].name, EndpointName::Codewhisperer);
-        assert_eq!(eps[3].name, EndpointName::Amazonq);
+        assert_eq!(
+            eps.iter().map(|e| e.name).collect::<Vec<_>>(),
+            vec![EndpointName::Ide]
+        );
     }
 
     #[test]
-    fn test_effective_endpoints_empty_vec_returns_all() {
+    fn test_effective_endpoints_empty_vec_preserves_ide_only_behavior() {
         let creds = KiroCredentials {
             endpoint: Some(vec![]),
             ..Default::default()
         };
         let eps = creds.effective_endpoints("us-east-1");
-        assert_eq!(eps.len(), 4);
-        assert_eq!(eps[0].name, EndpointName::Ide);
+        assert_eq!(
+            eps.iter().map(|e| e.name).collect::<Vec<_>>(),
+            vec![EndpointName::Ide]
+        );
     }
 
     #[test]
-    fn test_effective_endpoints_single_preferred_prefixes_with_default_tail() {
+    fn test_effective_endpoints_single_explicit_endpoint_does_not_expand() {
         let creds = KiroCredentials {
             endpoint: Some(vec![EndpointName::Runtime]),
             ..Default::default()
@@ -1074,31 +1073,25 @@ mod tests {
         let eps = creds.effective_endpoints("us-east-1");
         assert_eq!(
             eps.iter().map(|e| e.name).collect::<Vec<_>>(),
-            vec![
-                EndpointName::Runtime,
-                EndpointName::Ide,
-                EndpointName::Codewhisperer,
-                EndpointName::Amazonq,
-            ]
+            vec![EndpointName::Runtime]
         );
     }
 
     #[test]
-    fn test_effective_endpoints_multiple_preferred_dedups() {
+    fn test_effective_endpoints_explicit_set_dedups_without_expanding() {
         let creds = KiroCredentials {
-            endpoint: Some(vec![EndpointName::Runtime, EndpointName::Codewhisperer]),
+            endpoint: Some(vec![
+                EndpointName::Runtime,
+                EndpointName::Codewhisperer,
+                EndpointName::Runtime,
+            ]),
             ..Default::default()
         };
         let eps = creds.effective_endpoints("us-east-1");
-        // 首选 [Runtime, Codewhisperer] + 剩余默认序去重 [Ide, Amazonq]
+        // 显式集合仅按声明顺序去重，不隐式添加其它上游端点。
         assert_eq!(
             eps.iter().map(|e| e.name).collect::<Vec<_>>(),
-            vec![
-                EndpointName::Runtime,
-                EndpointName::Codewhisperer,
-                EndpointName::Ide,
-                EndpointName::Amazonq,
-            ]
+            vec![EndpointName::Runtime, EndpointName::Codewhisperer]
         );
     }
 

@@ -105,6 +105,15 @@ pub struct Config {
     #[serde(default = "default_tls_backend")]
     pub tls_backend: TlsBackend,
 
+    /// 额外信任的 CA 证书路径（PEM 格式），仅用于本进程出站 HTTPS 请求
+    #[serde(default)]
+    pub ca_cert_path: Option<String>,
+
+    /// 内置固定 Key（可选）：启动时自动注册为一条子 API Key（幂等、无限额度、永不过期），
+    /// 用于兼容客户端写死密钥的场景（如 mihaha 桌面端），仅在 admin_psw 同时启用时生效
+    #[serde(default)]
+    pub api_key: Option<String>,
+
     /// 外部 count_tokens API 地址（可选）
     #[serde(default)]
     pub count_tokens_api_url: Option<String>,
@@ -197,7 +206,7 @@ fn default_load_balancing_mode() -> String {
 }
 
 fn default_model_cache_ttl_secs() -> u64 {
-    3600
+    86400
 }
 
 impl Default for Config {
@@ -213,6 +222,8 @@ impl Default for Config {
             system_version: default_system_version(),
             node_version: default_node_version(),
             tls_backend: default_tls_backend(),
+            ca_cert_path: None,
+            api_key: None,
             count_tokens_api_url: None,
             count_tokens_api_key: None,
             count_tokens_auth_type: default_count_tokens_auth_type(),
@@ -294,6 +305,8 @@ impl Config {
     /// - `PROXY_URL`: HTTP 代理地址
     /// - `PROXY_USERNAME`: 代理用户名
     /// - `PROXY_PASSWORD`: 代理密码
+    /// - `CA_CERT_PATH`: 额外信任的 CA 证书路径（PEM 格式）
+    /// - `API_KEY`: 内置固定 Key（启动时自动注册为一条子 API Key，需同时启用 admin_psw）
     /// - `LOAD_BALANCING_MODE`: 负载均衡模式
     /// - `MODEL_CACHE_TTL_SECS`: /v1/models 动态列表缓存 TTL（秒）
     pub fn apply_env_overrides(&mut self) {
@@ -327,6 +340,12 @@ impl Config {
         }
         if let Ok(v) = env::var("PROXY_PASSWORD") {
             self.proxy_password = Some(v);
+        }
+        if let Ok(v) = env::var("CA_CERT_PATH") {
+            self.ca_cert_path = Some(v);
+        }
+        if let Ok(v) = env::var("API_KEY") {
+            self.api_key = Some(v);
         }
         if let Ok(v) = env::var("LOAD_BALANCING_MODE") {
             self.load_balancing_mode = v;
@@ -374,14 +393,14 @@ mod tests {
     #[test]
     fn test_model_cache_ttl_default() {
         let config = Config::default();
-        assert_eq!(config.model_cache_ttl_secs, 3600);
+        assert_eq!(config.model_cache_ttl_secs, 86400);
     }
 
     #[test]
     fn test_model_cache_ttl_deserialize_default() {
-        // 配置缺省该字段时应回退默认 3600
+        // 配置缺省该字段时应回退默认 86400（每日刷新一次）
         let config: Config = serde_json::from_str("{}").unwrap();
-        assert_eq!(config.model_cache_ttl_secs, 3600);
+        assert_eq!(config.model_cache_ttl_secs, 86400);
     }
 
     #[test]

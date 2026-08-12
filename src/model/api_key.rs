@@ -349,5 +349,113 @@ impl ApiKeyManager {
         }
         Ok(())
     }
+
+    /// 幂等确保存在一条固定值的内置 Key（无限额度、永不过期、立即激活）。
+    ///
+    /// 用于兼容客户端写死密钥的场景（如 mihaha 桌面端配置里的 `apiKey`）：
+    /// 该 key 一旦存在（无论是否是本方法创建的）即跳过，不会重复插入或覆盖用户
+    /// 在 Admin UI 里对同名 key 做的任何修改（启用状态、额度、绑定账号等）。
+    pub fn ensure_fixed_key(&self, key: &str, name: &str) -> anyhow::Result<()> {
+        {
+            let keys = self.keys.read();
+            if keys.iter().any(|k| k.key == key) {
+                return Ok(());
+            }
+        }
+        let mut keys = self.keys.write();
+        // 双重检查：持锁期间可能已被其他调用插入
+        if keys.iter().any(|k| k.key == key) {
+            return Ok(());
+        }
+        let next_id = keys.iter().map(|k| k.id).max().unwrap_or(0) + 1;
+        let mut api_key = ApiKey::new(next_id, name.to_string(), None, None, default_limit_unit(), None, None);
+        api_key.key = key.to_string();
+        api_key.activated_at = Some(Utc::now());
+        keys.push(api_key);
+        drop(keys);
+        self.save()
+    }
     // APPEND_MARKER2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 临时目录守卫：Drop 时自动清理，避免测试产物残留
+    struct TempDirGuard(PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_manager() -> (TempDirGuard, ApiKeyManager) {
+        let dir = std::env::temp_dir().join(format!("kiro2cc-api-key-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("创建临时目录失败");
+        let path = dir.join("api_keys.json");
+        let manager = ApiKeyManager::load(&path).expect("加载空 ApiKeyManager 失败");
+        (TempDirGuard(dir), manager)
+    }
+
+    #[test]
+    fn test_ensure_fixed_key_creates_active_unlimited_key() {
+        let (_dir, manager) = temp_manager();
+        manager
+            .ensure_fixed_key("mihaha", "内置固定 Key")
+            .expect("首次注册固定 Key 失败");
+
+        let keys = manager.list();
+        assert_eq!(keys.len(), 1);
+        let key = &keys[0];
+        assert_eq!(key.key, "mihaha");
+        assert!(key.enabled);
+        assert!(key.is_active());
+        assert!(!key.is_expired());
+        assert!(key.spending_limit.is_none());
+        assert!(key.expires_at.is_none());
+
+        match manager.authenticate("mihaha") {
+            ApiKeyAuthResult::Valid { .. } => {}
+            other => panic!("期望认证通过，实际: {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn test_ensure_fixed_key_is_idempotent() {
+        let (_dir, manager) = temp_manager();
+        manager
+            .ensure_fixed_key("mihaha", "内置固定 Key")
+            .expect("首次注册固定 Key 失败");
+        manager
+            .ensure_fixed_key("mihaha", "内置固定 Key")
+            .expect("重复注册固定 Key 应为幂等操作");
+
+        assert_eq!(manager.list().len(), 1);
+    }
+
+    #[test]
+    fn test_ensure_fixed_key_preserves_user_edits() {
+        let (_dir, manager) = temp_manager();
+        manager
+            .ensure_fixed_key("mihaha", "内置固定 Key")
+            .expect("首次注册固定 Key 失败");
+
+        let id = manager.list()[0].id;
+        // 模拟用户在 Admin UI 里手动禁用/改名该 key
+        manager
+            .update(id, Some("用户改名".to_string()), Some(false), None, None, None, None, None)
+            .expect("更新固定 Key 失败");
+
+        // 重新确保固定 Key 存在：不应覆盖用户已做的修改
+        manager
+            .ensure_fixed_key("mihaha", "内置固定 Key")
+            .expect("重复注册固定 Key 应为幂等操作");
+
+        let keys = manager.list();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].name, "用户改名");
+        assert!(!keys[0].enabled);
+    }
 }

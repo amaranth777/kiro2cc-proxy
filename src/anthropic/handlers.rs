@@ -28,7 +28,7 @@ use super::middleware::{ApiKeyContext, AppState};
 use super::stream::{BufferedStreamContext, SseEvent, StreamContext};
 use super::types::{
     CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model, ModelsResponse,
-    OutputConfig, Thinking,
+    Thinking,
 };
 use super::websearch;
 
@@ -36,7 +36,7 @@ use super::websearch;
 ///
 /// 诊断端点（无需认证），返回请求的关键信息，用于排查客户端连接问题
 pub async fn ping(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     request: axum::http::Request<Body>,
 ) -> impl IntoResponse {
     let method = request.method().to_string();
@@ -57,13 +57,8 @@ pub async fn ping(
         })
         .collect();
 
-    // 诊断端点无需认证，不主动触发上游刷新：有动态缓存则报缓存数，否则报静态表数
-    let models_count = state
-        .model_cache
-        .read()
-        .as_ref()
-        .map(|c| c.models.len())
-        .unwrap_or_else(|| build_model_list().len());
+    // 诊断端点无需认证，不主动触发上游刷新：只报已有的 CLI 发现缓存
+    let models_count = build_model_list().len();
 
     Json(json!({
         "status": "ok",
@@ -207,470 +202,66 @@ fn parse_messages_request(body: &[u8]) -> Result<MessagesRequest, Response> {
 
 /// GET /v1/models
 ///
-/// 返回可用的模型列表（动态来源，带 TTL 缓存 + 静态表回退）
+/// 返回可用的模型列表
 pub async fn get_models(State(state): State<AppState>) -> impl IntoResponse {
     tracing::info!("Received GET /v1/models request");
 
     Json(ModelsResponse {
         object: "list".to_string(),
-        data: fetch_models_dynamic(&state).await,
+        data: load_model_list(&state).await,
     })
 }
 
-/// 模型缓存别名，简化签名
-type ModelCache = std::sync::Arc<parking_lot::RwLock<Option<super::middleware::CachedModels>>>;
-
-/// 动态获取模型列表：优先上游实时响应（带 TTL 缓存），失败按顺序回退。
-///
-/// 分支：
-/// 1. 缓存存在且未过期 → 直接返回缓存，不打上游
-/// 2. 缓存过期/缺失且上游成功返回非空模型集 → 映射、写缓存、返回
-/// 3. 上游失败但存在旧缓存 → 续用旧缓存（warn）
-/// 4. 上游失败且无缓存 → 回退静态表 `build_model_list()`（warn）
-/// 5. 未配置 `kiro_provider` → 直接回退静态表（无上游可查）
-pub(crate) async fn fetch_models_dynamic(state: &AppState) -> Vec<Model> {
-    // 分支 5：无上游 provider，直接静态表
-    let Some(provider) = state.kiro_provider.as_ref() else {
-        return build_model_list();
-    };
-
-    let ttl = Duration::from_secs(provider.token_manager().config().model_cache_ttl_secs);
-
-    // 分支 1：缓存命中且未过期
-    if let Some(hit) = cached_if_fresh(&state.model_cache, ttl) {
-        return hit;
+async fn load_model_list(state: &AppState) -> Vec<Model> {
+    // A successful catalog is reusable across all discovery paths. A cached
+    // CLI failure must not suppress authenticated API discovery, though.
+    if let Some(Some(cached)) = super::model_catalog::cached_models() {
+        return models_from_discovery(Some(cached));
     }
 
-    // 缓存缺失/过期，尝试刷新上游（仅此处涉及网络；结果归一化为 Option<Vec<Model>>）
-    let refreshed: Option<Vec<Model>> = match provider.token_manager().list_available_models().await
-    {
-        Ok(resp) if !resp.models.is_empty() => {
-            Some(resp.models.iter().map(available_model_to_model).collect())
+    let discovered = if let Some(provider) = state.kiro_provider.as_ref() {
+        let ttl = Duration::from_secs(provider.token_manager().config().model_cache_ttl_secs);
+        let (models, error) = super::model_catalog::available_models_or_else(
+            provider.token_manager().list_available_models().await,
+            super::model_catalog::discover_models,
+        );
+        if let Some(error) = error {
+            tracing::warn!(%error, "ListAvailableModels failed; using Kiro CLI discovery fallback");
+        } else if let Some(models) = models.as_ref() {
+            super::model_catalog::remember_models(models.clone(), ttl);
         }
-        Ok(_) => {
-            tracing::warn!("上游模型列表为空，回退缓存/静态表");
-            None
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "刷新上游模型列表失败，回退缓存/静态表");
-            None
-        }
-    };
-
-    resolve_after_refresh(&state.model_cache, refreshed)
-}
-
-/// 缓存命中判定（纯逻辑，无网络）：存在且未超过 TTL 时返回克隆的模型列表。
-fn cached_if_fresh(cache: &ModelCache, ttl: Duration) -> Option<Vec<Model>> {
-    let guard = cache.read();
-    guard
-        .as_ref()
-        .filter(|cached| cached.fetched_at.elapsed() < ttl)
-        .map(|cached| cached.models.clone())
-}
-
-/// 刷新结果落地（纯逻辑，无网络）：
-/// - `Some(非空)` → 写缓存并返回（分支 2）
-/// - `None` 且有旧缓存 → 续用旧缓存（分支 3）
-/// - `None` 且无缓存 → 静态表（分支 4）
-fn resolve_after_refresh(cache: &ModelCache, refreshed: Option<Vec<Model>>) -> Vec<Model> {
-    if let Some(models) = refreshed {
-        *cache.write() = Some(super::middleware::CachedModels {
-            models: models.clone(),
-            fetched_at: std::time::Instant::now(),
-        });
-        return models;
-    }
-    if let Some(cached) = cache.read().as_ref() {
-        return cached.models.clone();
-    }
-    build_model_list()
-}
-
-/// 构建可用模型列表（供 get_models 和 get_model 共用）
-pub(crate) fn build_model_list() -> Vec<Model> {
-    vec![
-        // === 旧版模型 ID（兼容旧版 Claude Code 客户端） ===
-        // 这些旧 ID 在 map_model() 中会被正确映射到对应的 Kiro 模型
-        Model {
-            id: "claude-3-5-sonnet-20241022".to_string(),
-            object: "model".to_string(),
-            created: 1729555200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3.5 Sonnet".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 8192,
-        },
-        Model {
-            id: "claude-3-5-haiku-20241022".to_string(),
-            object: "model".to_string(),
-            created: 1729555200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3.5 Haiku".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 8192,
-        },
-        Model {
-            id: "claude-3-opus-20240229".to_string(),
-            object: "model".to_string(),
-            created: 1709164800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3 Opus".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 4096,
-        },
-        Model {
-            id: "claude-3-haiku-20240307".to_string(),
-            object: "model".to_string(),
-            created: 1709769600,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3 Haiku".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 4096,
-        },
-        Model {
-            id: "claude-3-sonnet-20240229".to_string(),
-            object: "model".to_string(),
-            created: 1709164800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude 3 Sonnet".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 4096,
-        },
-        // === Claude 4.x 过渡期模型 ID ===
-        Model {
-            id: "claude-sonnet-4".to_string(),
-            object: "model".to_string(),
-            created: 1747180800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-sonnet-4-20250514".to_string(),
-            object: "model".to_string(),
-            created: 1747180800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-opus-4-20250514".to_string(),
-            object: "model".to_string(),
-            created: 1747180800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        // === 当前主力模型 ===
-        Model {
-            id: "claude-sonnet-4-5-20250929".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-sonnet-4-5-20250929-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-opus-4-5-20251101".to_string(),
-            object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-opus-4-5-20251101-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-sonnet-4-6".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-sonnet-4-6-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-sonnet-5".to_string(),
-            object: "model".to_string(),
-            created: 1775600000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-sonnet-5-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1775600000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-opus-4-6".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-opus-4-6-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-opus-4-7".to_string(),
-            object: "model".to_string(),
-            created: 1773000000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-opus-4-7-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1773000000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-opus-4-8".to_string(),
-            object: "model".to_string(),
-            created: 1775600000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-opus-4-8-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1775600000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-opus-5".to_string(),
-            object: "model".to_string(),
-            created: 1777500000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-opus-5-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1777500000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-fable-5".to_string(),
-            object: "model".to_string(),
-            created: 1772582400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Fable 5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-fable-5-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1772582400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Fable 5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-haiku-4-5-20251001".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        Model {
-            id: "claude-haiku-4-5-20251001-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 64000,
-        },
-        // === 非 Claude 模型 ===
-        Model {
-            id: "auto".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "kiro".to_string(),
-            display_name: "Auto (智能路由)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-        },
-        Model {
-            id: "deepseek-3.2".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "deepseek".to_string(),
-            display_name: "DeepSeek 3.2".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-        },
-        Model {
-            id: "glm-5".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "glm".to_string(),
-            display_name: "GLM-5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-        },
-        Model {
-            id: "minimax-m2.5".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "minimax".to_string(),
-            display_name: "MiniMax M2.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-        },
-        Model {
-            id: "minimax-m2.1".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "minimax".to_string(),
-            display_name: "MiniMax M2.1".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-        },
-        Model {
-            id: "qwen3-coder-next".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "qwen".to_string(),
-            display_name: "Qwen3 Coder Next".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-        },
-        Model {
-            id: "gpt-5.6-sol".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "openai".to_string(),
-            display_name: "GPT-5.6 Sol".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-        },
-        Model {
-            id: "gpt-5.6-terra".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "openai".to_string(),
-            display_name: "GPT-5.6 Terra".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-        },
-        Model {
-            id: "gpt-5.6-luna".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "openai".to_string(),
-            display_name: "GPT-5.6 Luna".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-        },
-    ]
-}
-
-/// 根据模型 ID 前缀推断提供方（ListAvailableModels 响应不含厂商归属字段）
-///
-/// 命名规则与 `build_model_list()` 中手工维护的 `owned_by` 保持一致；未知前缀返回 `"unknown"`。
-/// 供 `/v1/models` 动态映射与 Admin 端共享，避免两份实现漂移。
-pub(crate) fn guess_owned_by(model_id: &str) -> &'static str {
-    let id = model_id.to_lowercase();
-    if id.contains("claude") {
-        "anthropic"
-    } else if id.contains("gpt") {
-        "openai"
-    } else if id == "auto" {
-        "kiro"
-    } else if id.contains("deepseek") {
-        "deepseek"
-    } else if id.contains("minimax") {
-        "minimax"
-    } else if id.contains("glm") {
-        "glm"
-    } else if id.contains("qwen") {
-        "qwen"
+        models
     } else {
-        "unknown"
-    }
+        super::model_catalog::discover_models()
+    };
+    models_from_discovery(discovered)
 }
 
-/// 将上游 `ListAvailableModels` 返回的单条模型映射为 Anthropic `Model`
+/// 构建可用模型目录（供 get_models 和 get_model 共用）。
 ///
-/// 纯函数，不涉及网络调用，可直接用 fake `AvailableModelInfo` 单测。
-pub(crate) fn available_model_to_model(
-    info: &crate::kiro::model::available_models::AvailableModelInfo,
-) -> Model {
-    Model {
-        id: info.model_id.clone(),
-        object: "model".to_string(),
-        created: 0,
-        owned_by: guess_owned_by(&info.model_id).to_string(),
-        display_name: info.model_name.clone(),
-        model_type: "chat".to_string(),
-        max_tokens: info.token_limits.max_output_tokens as i32,
-    }
+/// 官方 Kiro CLI 是唯一模型真相：发现失败时宁可返回空目录，也不能用过期
+/// 静态表宣称模型可用。历史模型名只保留在请求转换中作为别名。
+pub(crate) fn build_model_list() -> Vec<Model> {
+    models_from_discovery(super::model_catalog::discover_models())
+}
+
+fn models_from_discovery(
+    discovered: Option<Vec<super::model_catalog::UpstreamModel>>,
+) -> Vec<Model> {
+    discovered
+        .unwrap_or_default()
+        .into_iter()
+        .map(|upstream| Model {
+            id: upstream.id.clone(),
+            object: "model".to_string(),
+            created: 0,
+            owned_by: "kiro".to_string(),
+            display_name: upstream.id,
+            model_type: "chat".to_string(),
+            max_tokens: upstream.context_length,
+            context_length: upstream.context_length,
+        })
+        .collect()
 }
 
 /// GET /v1/models/:model_id
@@ -682,8 +273,8 @@ pub async fn get_model(
 ) -> Response {
     tracing::info!(model_id = %model_id, "Received GET /v1/models/:model_id request");
 
-    // 与 /v1/models 相同的动态来源，查找匹配的模型
-    let models = fetch_models_dynamic(&state).await;
+    // 复用 get_models 的模型列表，查找匹配的模型
+    let models = load_model_list(&state).await;
     if let Some(model) = models.into_iter().find(|m| m.id == model_id) {
         Json(model).into_response()
     } else {
@@ -747,8 +338,8 @@ pub async fn post_messages(
         }
     };
 
-    // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
-    override_thinking_from_model_name(&mut payload);
+    // 客户端未声明 thinking 时默认启用 adaptive
+    apply_default_thinking(&mut payload);
     tracing::info!(
         thinking_type = ?payload.thinking.as_ref().map(|t| t.thinking_type.as_str()),
         budget_tokens = ?payload.thinking.as_ref().map(|t| t.budget_tokens),
@@ -1388,15 +979,14 @@ async fn handle_non_stream_request(
         "model": model,
         "stop_reason": stop_reason,
         "stop_sequence": null,
-        // 客户端展示缩放（output_tokens 不缩放）；tracker 已写入真实值
         "usage": {
-            "input_tokens": super::stream::scale_for_client(report_input, model),
+            "input_tokens": report_input,
             "output_tokens": reported_output_tokens,
-            "cache_creation_input_tokens": super::stream::scale_for_client(report_cache_creation, model),
-            "cache_read_input_tokens": super::stream::scale_for_client(report_cache_read, model),
+            "cache_creation_input_tokens": report_cache_creation,
+            "cache_read_input_tokens": report_cache_read,
             "cache_creation": {
-                "ephemeral_5m_input_tokens": super::stream::scale_for_client(report_creation_5m, model),
-                "ephemeral_1h_input_tokens": super::stream::scale_for_client(report_creation_1h, model)
+                "ephemeral_5m_input_tokens": report_creation_5m,
+                "ephemeral_1h_input_tokens": report_creation_1h
             }
         }
     });
@@ -1456,49 +1046,14 @@ fn extract_client_ip(
     connect_info.map(|addr| addr.ip().to_string())
 }
 
-/// 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
-///
-/// - Opus 4.6/4.7/4.8/5：覆写为 adaptive 类型
-/// - 其他模型：覆写为 enabled 类型
-/// - budget_tokens 固定为 20000
-fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
-    let model_lower = payload.model.to_lowercase();
-    if !model_lower.contains("thinking") {
-        return;
-    }
-
-    let is_opus_adaptive = model_lower.contains("opus")
-        && (model_lower.contains("4-6")
-            || model_lower.contains("4.6")
-            || model_lower.contains("4-7")
-            || model_lower.contains("4.7")
-            || model_lower.contains("4-8")
-            || model_lower.contains("4.8")
-            || model_lower.contains("opus-5")
-            || model_lower.contains("opus.5")
-            || model_lower.contains("opus 5"));
-
-    let thinking_type = if is_opus_adaptive {
-        "adaptive"
-    } else {
-        "enabled"
-    };
-
-    tracing::info!(
-        model = %payload.model,
-        thinking_type = thinking_type,
-        "模型名包含 thinking 后缀，覆写 thinking 配置"
-    );
-
-    payload.thinking = Some(Thinking {
-        thinking_type: thinking_type.to_string(),
-        budget_tokens: 20000,
-    });
-
-    if is_opus_adaptive {
-        payload.output_config = Some(OutputConfig {
-            effort: "high".to_string(),
-            format: None,
+/// Apply the default only when the client omitted `thinking`.
+/// Explicit enabled/adaptive/disabled values are preserved verbatim.
+fn apply_default_thinking(payload: &mut MessagesRequest) {
+    if payload.thinking.is_none() {
+        tracing::info!(model = %payload.model, "请求未声明 thinking，默认启用 adaptive");
+        payload.thinking = Some(Thinking {
+            thinking_type: "adaptive".to_string(),
+            budget_tokens: 0,
         });
     }
 }
@@ -1567,8 +1122,8 @@ pub async fn post_messages_cc(
         }
     };
 
-    // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
-    override_thinking_from_model_name(&mut payload);
+    // 客户端未声明 thinking 时默认启用 adaptive
+    apply_default_thinking(&mut payload);
     tracing::info!(
         thinking_type = ?payload.thinking.as_ref().map(|t| t.thinking_type.as_str()),
         budget_tokens = ?payload.thinking.as_ref().map(|t| t.budget_tokens),
@@ -1919,119 +1474,33 @@ fn create_buffered_sse_stream(
 mod tests {
     use super::*;
 
-    fn find_by_id(id: &str) -> Option<Model> {
-        build_model_list().into_iter().find(|m| m.id == id)
+    #[test]
+    fn discovered_catalog_does_not_include_static_models() {
+        let models =
+            models_from_discovery(Some(vec![super::super::model_catalog::UpstreamModel {
+                id: "claude-sonnet-5".to_string(),
+                context_length: 1_000_000,
+                description: "live".to_string(),
+                rate_multiplier: None,
+                thinking: false,
+            }]));
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "claude-sonnet-5");
+        assert_eq!(models[0].context_length, 1_000_000);
+        assert!(models.iter().all(|model| model.id != "claude-fable-5"));
     }
 
     #[test]
-    fn test_guess_owned_by_known_and_unknown_prefixes() {
-        assert_eq!(guess_owned_by("claude-sonnet-4.6"), "anthropic");
-        assert_eq!(guess_owned_by("gpt-5.6-sol"), "openai");
-        assert_eq!(guess_owned_by("auto"), "kiro");
-        assert_eq!(guess_owned_by("deepseek-3.2"), "deepseek");
-        assert_eq!(guess_owned_by("minimax-m2.5"), "minimax");
-        assert_eq!(guess_owned_by("glm-5"), "glm");
-        assert_eq!(guess_owned_by("qwen3-coder-next"), "qwen");
-        assert_eq!(guess_owned_by("foo-model"), "unknown");
-    }
-
-    fn fake_model(id: &str) -> Model {
-        Model {
-            id: id.to_string(),
-            object: "model".to_string(),
-            created: 0,
-            owned_by: "test".to_string(),
-            display_name: id.to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 8192,
-        }
-    }
-
-    fn new_cache(entry: Option<super::super::middleware::CachedModels>) -> ModelCache {
-        std::sync::Arc::new(parking_lot::RwLock::new(entry))
-    }
-
-    // 分支 1：缓存命中且未过期 → 返回缓存，不触发刷新
-    #[test]
-    fn test_cached_if_fresh_hit() {
-        let cache = new_cache(Some(super::super::middleware::CachedModels {
-            models: vec![fake_model("cached-a")],
-            fetched_at: std::time::Instant::now(),
-        }));
-        let hit = cached_if_fresh(&cache, Duration::from_secs(3600));
-        assert!(hit.is_some());
-        assert_eq!(hit.unwrap()[0].id, "cached-a");
-    }
-
-    // 分支 1 反例：缓存过期 → 视为未命中
-    #[test]
-    fn test_cached_if_fresh_expired() {
-        let cache = new_cache(Some(super::super::middleware::CachedModels {
-            models: vec![fake_model("stale")],
-            fetched_at: std::time::Instant::now() - Duration::from_secs(10),
-        }));
-        // TTL 5s，已过 10s
-        assert!(cached_if_fresh(&cache, Duration::from_secs(5)).is_none());
-        // 空缓存亦未命中
-        assert!(cached_if_fresh(&new_cache(None), Duration::from_secs(3600)).is_none());
-    }
-
-    // 分支 2：刷新成功 → 写缓存并返回
-    #[test]
-    fn test_resolve_after_refresh_success_writes_cache() {
-        let cache = new_cache(None);
-        let out = resolve_after_refresh(&cache, Some(vec![fake_model("fresh")]));
-        assert_eq!(out[0].id, "fresh");
-        // 缓存已写入
-        let guard = cache.read();
-        assert_eq!(guard.as_ref().unwrap().models[0].id, "fresh");
-    }
-
-    // 分支 3：刷新失败但有旧缓存 → 续用旧缓存
-    #[test]
-    fn test_resolve_after_refresh_failure_uses_old_cache() {
-        let cache = new_cache(Some(super::super::middleware::CachedModels {
-            models: vec![fake_model("old")],
-            fetched_at: std::time::Instant::now(),
-        }));
-        let out = resolve_after_refresh(&cache, None);
-        assert_eq!(out[0].id, "old");
-    }
-
-    // 分支 4：刷新失败且无缓存 → 回退静态表
-    #[test]
-    fn test_resolve_after_refresh_failure_no_cache_falls_back_static() {
-        let cache = new_cache(None);
-        let out = resolve_after_refresh(&cache, None);
-        assert_eq!(out.len(), build_model_list().len());
-        assert!(out.iter().any(|m| m.id == "claude-3-5-sonnet-20241022"));
-    }
-
-    // 分支 5：无 provider → fetch_models_dynamic 直接回退静态表
-    #[tokio::test]
-    async fn test_fetch_models_dynamic_no_provider_static() {
-        let state = AppState::new();
-        assert!(state.kiro_provider.is_none());
-        let out = fetch_models_dynamic(&state).await;
-        assert_eq!(out.len(), build_model_list().len());
+    fn missing_discovery_returns_no_models() {
+        assert!(models_from_discovery(None).is_empty());
     }
 
     fn test_state() -> AppState {
         AppState::new()
     }
 
-    // get_model 命中（无 provider → 静态表来源）
-    #[tokio::test]
-    async fn test_get_model_hit() {
-        let resp = get_model(
-            State(test_state()),
-            axum::extract::Path("claude-3-5-sonnet-20241022".to_string()),
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    // get_model 未命中 → 404
+    // get_model 未命中 → 404（测试环境无 kiro-cli，发现结果为空目录）
     #[tokio::test]
     async fn test_get_model_not_found() {
         let resp = get_model(
@@ -2043,102 +1512,50 @@ mod tests {
     }
 
     #[test]
-    fn test_available_model_to_model_maps_fields() {
-        use crate::kiro::model::available_models::{AvailableModelInfo, TokenLimits};
-        let info = AvailableModelInfo {
-            model_id: "claude-sonnet-4.6".to_string(),
-            model_name: "Claude Sonnet 4.6".to_string(),
-            rate_multiplier: Some(1.3),
-            token_limits: TokenLimits {
-                max_input_tokens: 1_000_000,
-                max_output_tokens: 64_000,
-            },
-            additional_model_request_fields_schema: None,
-        };
-        let m = available_model_to_model(&info);
-        assert_eq!(m.id, "claude-sonnet-4.6");
-        assert_eq!(m.display_name, "Claude Sonnet 4.6");
-        assert_eq!(m.owned_by, "anthropic");
-        assert_eq!(m.max_tokens, 64_000);
-        assert_eq!(m.object, "model");
-        assert_eq!(m.model_type, "chat");
+    fn test_thinking_defaults_to_adaptive_when_omitted() {
+        let mut payload: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .unwrap();
+
+        apply_default_thinking(&mut payload);
+
+        let thinking = payload.thinking.expect("应自动启用 thinking");
+        assert_eq!(thinking.thinking_type, "adaptive");
     }
 
     #[test]
-    fn test_opus_4_6_max_tokens_is_128k() {
-        let m = find_by_id("claude-opus-4-6").expect("claude-opus-4-6 缺失");
-        assert_eq!(m.max_tokens, 128000);
-        let mt = find_by_id("claude-opus-4-6-thinking").expect("claude-opus-4-6-thinking 缺失");
-        assert_eq!(mt.max_tokens, 128000);
-    }
-
-    #[test]
-    fn test_fable_5_present() {
-        let m = find_by_id("claude-fable-5").expect("claude-fable-5 应存在");
-        assert_eq!(m.max_tokens, 128000);
-        assert_eq!(m.owned_by, "anthropic");
-        assert_eq!(m.object, "model");
-        assert_eq!(m.model_type, "chat");
-        assert_eq!(m.display_name, "Claude Fable 5");
-    }
-
-    #[test]
-    fn test_fable_5_thinking_present() {
-        let m = find_by_id("claude-fable-5-thinking").expect("claude-fable-5-thinking 应存在");
-        assert_eq!(m.max_tokens, 128000);
-        assert_eq!(m.display_name, "Claude Fable 5 (Thinking)");
-    }
-
-    #[test]
-    fn test_haiku_4_5_max_tokens_unchanged() {
-        // 回归：haiku-4-5 max_tokens 维持 64000
-        let m = find_by_id("claude-haiku-4-5-20251001").expect("haiku 条目缺失");
-        assert_eq!(m.max_tokens, 64000);
-    }
-
-    #[test]
-    fn test_opus_4_7_4_8_max_tokens_unchanged() {
-        // 回归
-        assert_eq!(find_by_id("claude-opus-4-7").unwrap().max_tokens, 128000);
-        assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 128000);
-    }
-
-    #[test]
-    fn test_build_model_list_includes_opus_5() {
-        let list = build_model_list();
-        let ids: std::collections::HashSet<&str> = list.iter().map(|m| m.id.as_str()).collect();
-
-        assert!(ids.contains("claude-opus-5"), "缺 claude-opus-5 静态表项");
-        assert!(
-            ids.contains("claude-opus-5-thinking"),
-            "缺 claude-opus-5-thinking 静态表项"
-        );
-
-        let opus5 = list.iter().find(|m| m.id == "claude-opus-5").unwrap();
-        assert_eq!(opus5.owned_by, "anthropic");
-        assert_eq!(opus5.display_name, "Claude Opus 5");
-        assert_eq!(opus5.max_tokens, 128000);
-
-        let opus5t = list
-            .iter()
-            .find(|m| m.id == "claude-opus-5-thinking")
+    fn test_explicit_thinking_is_preserved() {
+        for thinking_type in ["enabled", "adaptive", "disabled"] {
+            let mut payload: MessagesRequest = serde_json::from_value(serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "thinking": {"type": thinking_type},
+                "messages": [{"role": "user", "content": "hello"}]
+            }))
             .unwrap();
-        assert_eq!(opus5t.owned_by, "anthropic");
-        assert_eq!(opus5t.display_name, "Claude Opus 5 (Thinking)");
-        assert_eq!(opus5t.max_tokens, 128000);
 
-        // 回归：sonnet-5 仍在
-        assert!(ids.contains("claude-sonnet-5"));
-        assert!(ids.contains("claude-sonnet-5-thinking"));
-        // 回归：opus-4.7/4.8 仍在
-        assert!(ids.contains("claude-opus-4-7"));
-        assert!(ids.contains("claude-opus-4-8"));
+            apply_default_thinking(&mut payload);
+
+            assert_eq!(payload.thinking.unwrap().thinking_type, thinking_type);
+        }
     }
 
     #[test]
-    fn test_sonnet_4_6_max_tokens_unchanged() {
-        // 回归
-        assert_eq!(find_by_id("claude-sonnet-4-6").unwrap().max_tokens, 64000);
+    fn test_model_name_does_not_override_explicit_thinking() {
+        let mut payload: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 1024,
+            "thinking": {"type": "disabled"},
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .unwrap();
+
+        apply_default_thinking(&mut payload);
+
+        assert_eq!(payload.thinking.unwrap().thinking_type, "disabled");
     }
 
     #[test]

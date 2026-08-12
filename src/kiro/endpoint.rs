@@ -33,6 +33,7 @@ pub enum EndpointName {
 
 impl EndpointName {
     /// 所有端点（固定顺序，与 `default_order` 一致）
+    #[cfg(test)]
     pub const ALL: [EndpointName; 4] = [
         EndpointName::Ide,
         EndpointName::Runtime,
@@ -62,6 +63,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     /// 默认端点顺序（轮询偏移基准）
+    #[cfg(test)]
     pub fn default_order() -> &'static [EndpointName] {
         &EndpointName::ALL
     }
@@ -96,6 +98,7 @@ impl Endpoint {
     }
 
     /// 4 个端点全集（顺序 = `default_order`）
+    #[cfg(test)]
     pub fn all(region: &str) -> [Endpoint; 4] {
         [
             Self::by_name(EndpointName::Ide, region),

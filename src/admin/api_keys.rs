@@ -385,17 +385,12 @@ mod tests {
             .collect();
         assert_eq!(actual_ids, expected_ids);
 
-        for id in [
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-            "claude-fable-5",
-            "claude-sonnet-5",
-        ] {
-            assert!(actual_ids.contains(id), "模型列表应包含 {id}");
-        }
+        assert!(
+            !actual_ids.contains("claude-fable-5"),
+            "未被官方 CLI 发现的模型不得出现在目录中"
+        );
 
-        // 零账号场景下 list_available_models 必然失败，触发回退到本地静态模型表
+        // 零账号场景下 list_available_models 必然失败，回退到 CLI 动态目录。
         assert!(
             parsed
                 .data

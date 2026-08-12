@@ -32,20 +32,52 @@ struct CachedBalance {
     data: BalanceResponse,
 }
 
+/// 根据模型 ID 前缀推断提供方（ListAvailableModels 响应不含厂商归属字段）
+///
+/// 命名规则与官方 Kiro CLI 发现的模型元数据保持一致；未知前缀返回 `"unknown"`。
+fn guess_owned_by(model_id: &str) -> &'static str {
+    let id = model_id.to_lowercase();
+    if id.contains("claude") {
+        "anthropic"
+    } else if id.contains("gpt") {
+        "openai"
+    } else if id == "auto" {
+        "kiro"
+    } else if id.contains("deepseek") {
+        "deepseek"
+    } else if id.contains("minimax") {
+        "minimax"
+    } else if id.contains("glm") {
+        "glm"
+    } else if id.contains("qwen") {
+        "qwen"
+    } else {
+        "unknown"
+    }
+}
+
 /// 将上游 `ListAvailableModels` 返回的单条模型映射为 `AdminModelItem`（成功路径）
 ///
 /// 纯函数，不涉及网络调用，可直接用 fake `AvailableModelInfo` 单测。
-/// 复用 `handlers::available_model_to_model` 完成 `Model` 映射，附加 Admin 专属的费率倍率。
 fn live_model_to_admin_item(
     info: &crate::kiro::model::available_models::AvailableModelInfo,
 ) -> super::types::AdminModelItem {
     super::types::AdminModelItem {
-        model: crate::anthropic::handlers::available_model_to_model(info),
+        model: crate::anthropic::types::Model {
+            id: info.model_id.clone(),
+            object: "model".to_string(),
+            created: 0,
+            owned_by: guess_owned_by(&info.model_id).to_string(),
+            display_name: info.model_name.clone(),
+            model_type: "chat".to_string(),
+            max_tokens: info.token_limits.max_output_tokens as i32,
+            context_length: info.token_limits.max_input_tokens as i32,
+        },
         rate_multiplier: info.rate_multiplier,
     }
 }
 
-/// 将本地静态模型条目映射为 `AdminModelItem`（上游调用失败时的回退路径）
+/// 将 CLI 动态目录条目映射为 `AdminModelItem`（上游调用失败时的回退路径）
 ///
 /// 纯函数，不涉及网络调用，可直接用 fake `Model` 单测。
 fn fallback_model_to_admin_item(
@@ -630,6 +662,7 @@ mod tests {
             display_name: "Claude 3.5 Sonnet".to_string(),
             model_type: "chat".to_string(),
             max_tokens: 8192,
+            context_length: 200_000,
         };
         let expected_id = model.id.clone();
         let item = fallback_model_to_admin_item(model);
@@ -649,6 +682,7 @@ mod tests {
                     display_name: id.to_string(),
                     model_type: "chat".to_string(),
                     max_tokens: 64_000,
+                    context_length: 200_000,
                 },
                 rate_multiplier: None,
             }

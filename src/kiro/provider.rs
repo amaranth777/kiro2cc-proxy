@@ -52,6 +52,8 @@ pub struct KiroProvider {
     client_cache: Mutex<HashMap<Option<ProxyConfig>, Client>>,
     /// TLS 后端配置
     tls_backend: TlsBackend,
+    /// 额外信任的 CA 证书路径（PEM 格式）
+    ca_cert_path: Option<String>,
     /// 并发控制信号量，限制同时发往上游的请求数
     concurrency_limit: Arc<Semaphore>,
     /// 单账号并发信号量：限制每个账号的同时请求数
@@ -76,9 +78,10 @@ impl KiroProvider {
     /// 创建带代理配置的 KiroProvider 实例
     pub fn with_proxy(token_manager: Arc<MultiTokenManager>, proxy: Option<ProxyConfig>) -> Self {
         let tls_backend = token_manager.config().tls_backend;
+        let ca_cert_path = token_manager.config().ca_cert_path.clone();
         // 预热：构建全局代理对应的 Client
-        let initial_client =
-            build_client(proxy.as_ref(), 180, tls_backend).expect("创建 HTTP 客户端失败");
+        let initial_client = build_client(proxy.as_ref(), 180, tls_backend, ca_cert_path.as_deref())
+            .expect("创建 HTTP 客户端失败");
         let mut cache = HashMap::new();
         cache.insert(proxy.clone(), initial_client);
 
@@ -87,6 +90,7 @@ impl KiroProvider {
             global_proxy: proxy,
             client_cache: Mutex::new(cache),
             tls_backend,
+            ca_cert_path,
             concurrency_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             credential_semaphores: Mutex::new(HashMap::new()),
             rpm_tracker: None,
@@ -127,7 +131,12 @@ impl KiroProvider {
         if let Some(client) = cache.get(&effective) {
             return Ok(client.clone());
         }
-        let client = build_client(effective.as_ref(), 180, self.tls_backend)?;
+        let client = build_client(
+            effective.as_ref(),
+            180,
+            self.tls_backend,
+            self.ca_cert_path.as_deref(),
+        )?;
         cache.insert(effective, client.clone());
         Ok(client)
     }
@@ -1278,9 +1287,12 @@ mod tests {
     fn test_select_endpoint_skips_throttled_buckets() {
         let mut config = Config::default();
         config.region = "us-east-1".to_string();
-        let mut creds = KiroCredentials::default();
-        creds.id = Some(1);
-        creds.refresh_token = Some("a".repeat(150));
+        let creds = KiroCredentials {
+            id: Some(1),
+            refresh_token: Some("a".repeat(150)),
+            endpoint: Some(EndpointName::ALL.to_vec()),
+            ..Default::default()
+        };
         let provider = create_test_provider(config, creds.clone());
 
         // 封禁 Ide 与 Runtime 两个桶
@@ -1298,52 +1310,60 @@ mod tests {
     }
 
     #[test]
-    fn test_select_endpoint_attempt_offset_rotates_endpoints() {
+    fn test_select_endpoint_default_preserves_ide_only_behavior() {
         let mut config = Config::default();
         config.region = "us-east-1".to_string();
-        let mut creds = KiroCredentials::default();
-        creds.id = Some(2);
-        creds.refresh_token = Some("a".repeat(150));
+        let creds = KiroCredentials {
+            id: Some(2),
+            refresh_token: Some("a".repeat(150)),
+            ..Default::default()
+        };
         let provider = create_test_provider(config, creds.clone());
 
-        // 4 桶均未封禁：attempt=0/1/2/3 应轮询 Ide/Runtime/Codewhisperer/Amazonq
-        assert_eq!(
-            provider.select_endpoint(&creds, 0).unwrap().name,
-            EndpointName::Ide
-        );
-        assert_eq!(
-            provider.select_endpoint(&creds, 1).unwrap().name,
-            EndpointName::Runtime
-        );
-        assert_eq!(
-            provider.select_endpoint(&creds, 2).unwrap().name,
-            EndpointName::Codewhisperer
-        );
-        assert_eq!(
-            provider.select_endpoint(&creds, 3).unwrap().name,
-            EndpointName::Amazonq
-        );
-        // attempt=4 回卷到 Ide
-        assert_eq!(
-            provider.select_endpoint(&creds, 4).unwrap().name,
-            EndpointName::Ide
-        );
+        for attempt in 0..5 {
+            assert_eq!(
+                provider.select_endpoint(&creds, attempt).unwrap().name,
+                EndpointName::Ide
+            );
+        }
     }
 
     #[test]
-    fn test_select_endpoint_returns_none_when_all_throttled() {
+    fn test_select_endpoint_explicit_set_rotates_endpoints() {
         let mut config = Config::default();
         config.region = "us-east-1".to_string();
-        let mut creds = KiroCredentials::default();
-        creds.id = Some(3);
-        creds.refresh_token = Some("a".repeat(150));
+        let creds = KiroCredentials {
+            id: Some(3),
+            refresh_token: Some("a".repeat(150)),
+            endpoint: Some(EndpointName::ALL.to_vec()),
+            ..Default::default()
+        };
         let provider = create_test_provider(config, creds.clone());
 
-        // 封禁全部 4 桶
-        for name in EndpointName::ALL {
+        for (attempt, expected) in EndpointName::ALL.into_iter().enumerate() {
+            assert_eq!(
+                provider.select_endpoint(&creds, attempt).unwrap().name,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_select_endpoint_returns_none_when_all_enabled_buckets_throttled() {
+        let mut config = Config::default();
+        config.region = "us-east-1".to_string();
+        let creds = KiroCredentials {
+            id: Some(4),
+            refresh_token: Some("a".repeat(150)),
+            endpoint: Some(vec![EndpointName::Runtime, EndpointName::Codewhisperer]),
+            ..Default::default()
+        };
+        let provider = create_test_provider(config, creds.clone());
+
+        for name in [EndpointName::Runtime, EndpointName::Codewhisperer] {
             provider
                 .endpoint_registry
-                .throttle(3, name, BUCKET_THROTTLE_DURATION);
+                .throttle(4, name, BUCKET_THROTTLE_DURATION);
         }
 
         assert!(provider.select_endpoint(&creds, 0).is_none());
@@ -1353,23 +1373,20 @@ mod tests {
     fn test_select_endpoint_respects_account_preferred_order() {
         let mut config = Config::default();
         config.region = "us-east-1".to_string();
-        let mut creds = KiroCredentials::default();
-        creds.id = Some(4);
-        creds.refresh_token = Some("a".repeat(150));
-        // 账号声明首选 Runtime
-        creds.endpoint = Some(vec![EndpointName::Runtime]);
+        let creds = KiroCredentials {
+            id: Some(10),
+            refresh_token: Some("a".repeat(150)),
+            endpoint: Some(vec![EndpointName::Runtime]),
+            ..Default::default()
+        };
         let provider = create_test_provider(config, creds.clone());
 
-        // attempt=0 应选 Runtime（首选在首）
-        assert_eq!(
-            provider.select_endpoint(&creds, 0).unwrap().name,
-            EndpointName::Runtime
-        );
-        // attempt=1 跳过 Runtime → Ide（默认序下一个）
-        assert_eq!(
-            provider.select_endpoint(&creds, 1).unwrap().name,
-            EndpointName::Ide
-        );
+        for attempt in 0..2 {
+            assert_eq!(
+                provider.select_endpoint(&creds, attempt).unwrap().name,
+                EndpointName::Runtime
+            );
+        }
     }
 
     #[test]
