@@ -125,3 +125,42 @@ fn build_router(state: AppState) -> Router {
         )
         .with_state(state)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn responses_route_is_registered() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("read test server address");
+        let app = create_router_with_provider_and_state(AppState::new(), None, None);
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve test router");
+        });
+
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build test client")
+            .post(format!("http://{address}/v1/responses"))
+            .bearer_auth("test-key")
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-5",
+                "input": "test"
+            }))
+            .send()
+            .await;
+        server.abort();
+
+        assert_eq!(
+            response.expect("send responses request").status().as_u16(),
+            401,
+            "an unauthenticated Responses request must reach the registered route"
+        );
+    }
+}
