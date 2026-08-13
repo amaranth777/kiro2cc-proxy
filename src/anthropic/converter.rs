@@ -525,6 +525,7 @@ pub fn map_model(model: &str) -> Option<String> {
             Some("claude-sonnet-4.6".to_string())
         } else if model_lower.contains("sonnet-5")
             || model_lower.contains("sonnet.5")
+            || model_lower.contains("sonnet5")
             || model_lower.contains("sonnet-4-7")
             || model_lower.contains("sonnet-4.7")
         {

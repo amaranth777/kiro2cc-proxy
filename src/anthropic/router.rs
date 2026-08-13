@@ -14,6 +14,10 @@ use crate::kiro::provider::KiroProvider;
 use super::{
     handlers::{count_tokens, get_model, get_models, ping, post_messages, post_messages_cc},
     middleware::{AppState, auth_middleware, cors_layer},
+    responses::{
+        post_chat_completions, post_completions, post_responses, unsupported_audio,
+        unsupported_embeddings, unsupported_images,
+    },
 };
 
 /// 请求体最大大小限制 (200MB)
@@ -24,6 +28,9 @@ const MAX_BODY_SIZE: usize = 200 * 1024 * 1024;
 /// # 端点
 /// - `GET /v1/models` - 获取可用模型列表
 /// - `POST /v1/messages` - 创建消息（对话）
+/// - `POST /v1/responses` - OpenAI Responses API 兼容入口
+/// - `POST /v1/chat/completions` - OpenAI Chat Completions API 兼容入口
+/// - `POST /v1/completions` - OpenAI legacy Completions API 兼容入口
 /// - `POST /v1/messages/count_tokens` - 计算 token 数量
 ///
 /// # 认证
@@ -59,6 +66,16 @@ fn build_router(state: AppState) -> Router {
         .route("/models", get(get_models))
         .route("/models/{model_id}", get(get_model))
         .route("/messages", post(post_messages))
+        .route("/responses", post(post_responses))
+        .route("/chat/completions", post(post_chat_completions))
+        .route("/completions", post(post_completions))
+        .route("/embeddings", post(unsupported_embeddings))
+        .route("/images/generations", post(unsupported_images))
+        .route("/images/edits", post(unsupported_images))
+        .route("/images/variations", post(unsupported_images))
+        .route("/audio/transcriptions", post(unsupported_audio))
+        .route("/audio/translations", post(unsupported_audio))
+        .route("/audio/speech", post(unsupported_audio))
         .route("/messages/count_tokens", post(count_tokens))
         .layer(middleware::from_fn_with_state(
             state.clone(),
