@@ -332,6 +332,45 @@ fn message_content(content: &Value, role: &str) -> Result<Value, String> {
                 }
                 blocks.push(block);
             }
+            "custom_tool_call" => {
+                let id = item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .ok_or("custom_tool_call.call_id is required")?;
+                let name = item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or("custom_tool_call.name is required")?;
+                let input = item.get("input").cloned().unwrap_or(Value::Null);
+                let input = if input.is_object() {
+                    input
+                } else {
+                    json!({"input": input})
+                };
+                blocks.push(json!({
+                    "type": "tool_use",
+                    "id": id,
+                    "name": name,
+                    "input": input
+                }));
+            }
+            "custom_tool_call_output" => {
+                let id = item
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .ok_or("custom_tool_call_output.call_id is required")?;
+                let output = item.get("output").cloned().unwrap_or(Value::Null);
+                let mut block = json!({
+                    "type": "tool_result",
+                    "tool_use_id": id,
+                    "content": output_text(&output)
+                });
+                if item.get("status").and_then(Value::as_str) == Some("failed") {
+                    block["is_error"] = json!(true);
+                }
+                blocks.push(block);
+            }
             _ => return Err(format!("unsupported message content type: {kind}")),
         }
     }
@@ -440,6 +479,43 @@ fn input_messages(input: &Value) -> Result<ParsedInput, String> {
                 }
                 push_user_block(&mut parsed.messages, block);
             }
+            "custom_tool_call" => {
+                let id = item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .ok_or("custom_tool_call.call_id is required")?;
+                let name = item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or("custom_tool_call.name is required")?;
+                let input = item.get("input").cloned().unwrap_or(Value::Null);
+                let input = if input.is_object() {
+                    input
+                } else {
+                    json!({"input": input})
+                };
+                parsed.messages.push(message(
+                    "assistant",
+                    json!([{"type": "tool_use", "id": id, "name": name, "input": input}]),
+                ));
+            }
+            "custom_tool_call_output" => {
+                let id = item
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .ok_or("custom_tool_call_output.call_id is required")?;
+                let output = item.get("output").cloned().unwrap_or(Value::Null);
+                let mut block = json!({
+                    "type": "tool_result",
+                    "tool_use_id": id,
+                    "content": output_text(&output)
+                });
+                if item.get("status").and_then(Value::as_str) == Some("failed") {
+                    block["is_error"] = json!(true);
+                }
+                push_user_block(&mut parsed.messages, block);
+            }
             "reasoning" => {
                 let summary = item
                     .get("summary")
@@ -464,6 +540,11 @@ fn input_messages(input: &Value) -> Result<ParsedInput, String> {
                 });
             }
             "additional_tools" => {
+                tracing::debug!(
+                    target: "kiro2cc_proxy::responses_diag",
+                    additional_tools_item = %diag_json(Some(item)),
+                    "Responses additional_tools item"
+                );
                 if let Some(tools) = item.get("tools").and_then(Value::as_array) {
                     parsed.tools.extend(tools.iter().cloned());
                 } else if let Some(tools) = item.get("items").and_then(Value::as_array) {
@@ -476,7 +557,6 @@ fn input_messages(input: &Value) -> Result<ParsedInput, String> {
             ),
             "computer_call"
             | "local_shell_call"
-            | "custom_tool_call"
             | "web_search_call"
             | "file_search_call"
             | "code_interpreter_call"
@@ -489,7 +569,6 @@ fn input_messages(input: &Value) -> Result<ParsedInput, String> {
             )),
             "computer_call_output"
             | "local_shell_call_output"
-            | "custom_tool_call_output"
             | "mcp_approval_response" => push_user_block(
                 &mut parsed.messages,
                 json!({"type": "text", "text": item_to_context_text(kind, item)}),
@@ -503,12 +582,33 @@ fn input_messages(input: &Value) -> Result<ParsedInput, String> {
     Ok(parsed)
 }
 
+/// 展开 `type: "namespace"` 工具容器。
+///
+/// Codex 通过 `additional_tools` 下发形如
+/// `{"type":"namespace","name":"functions","tools":[真实工具...]}` 的分组容器，
+/// 真实可调用的工具在内层 `tools` 中。若不展开，容器本身会被当成一个名为
+/// `functions` 的空 schema 工具，模型只能回调这个壳，客户端随后报
+/// `unsupported call: functions`。
+fn flatten_namespace_tools(tools: &[Value]) -> Vec<Value> {
+    let mut flat = Vec::new();
+    for tool in tools {
+        let is_namespace = tool.get("type").and_then(Value::as_str) == Some("namespace");
+        match tool.get("tools").and_then(Value::as_array) {
+            Some(inner) if is_namespace => flat.extend(flatten_namespace_tools(inner)),
+            _ => flat.push(tool.clone()),
+        }
+    }
+    flat
+}
+
 fn function_tools(tools: Option<&[Value]>) -> Result<Option<Vec<Tool>>, String> {
     let Some(tools) = tools else {
         return Ok(None);
     };
+    let tools = flatten_namespace_tools(tools);
+    let mut seen: Vec<String> = Vec::new();
     let mut result = Vec::new();
-    for tool in tools {
+    for tool in &tools {
         let tool_type = tool.get("type").and_then(Value::as_str).unwrap_or("function");
         let function = tool.get("function").filter(|value| value.is_object());
         let raw_name = tool
@@ -529,7 +629,14 @@ fn function_tools(tools: Option<&[Value]>) -> Result<Option<Vec<Tool>>, String> 
         if description.is_empty() && tool_type != "function" {
             description = format!("{tool_type} tool");
         }
-        let parameters = if raw_name == "exec" {
+        // grammar 约束的自定义工具（Codex 的 exec 用 Lark 语法）接收裸文本而非 JSON 对象，
+        // 统一映射为单字符串入参，与 custom_tool_call 的 {"input": ...} 包装保持一致。
+        let is_grammar_tool = tool
+            .get("format")
+            .and_then(|format| format.get("type"))
+            .and_then(Value::as_str)
+            == Some("grammar");
+        let parameters = if raw_name == "exec" || is_grammar_tool {
             json!({
                 "type": "object",
                 "properties": {
@@ -560,6 +667,14 @@ fn function_tools(tools: Option<&[Value]>) -> Result<Option<Vec<Tool>>, String> 
         }
         let input_schema: Map<String, Value> = serde_json::from_value(parameters)
             .map_err(|_| "function.parameters must be an object")?;
+        if seen.contains(&name) {
+            tracing::warn!(
+                tool_name = %name,
+                "工具名重复，保留先出现的定义"
+            );
+            continue;
+        }
+        seen.push(name.clone());
         result.push(Tool {
             tool_type: None,
             name,
@@ -713,6 +828,33 @@ fn referenced_messages(
                         .and_then(Value::as_str)
                         .unwrap_or("{}");
                     let input = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+                    messages.push(message(
+                        "assistant",
+                        json!([{
+                            "type": "tool_use",
+                            "id": id,
+                            "name": name,
+                            "input": input
+                        }]),
+                    ));
+                }
+                "custom_tool_call" => {
+                    let id = stored
+                        .item
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&reference.id);
+                    let name = stored
+                        .item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let input = stored.item.get("input").cloned().unwrap_or(Value::Null);
+                    let input = if input.is_object() {
+                        input
+                    } else {
+                        json!({"input": input})
+                    };
                     messages.push(message(
                         "assistant",
                         json!([{
@@ -1243,6 +1385,47 @@ fn input_tokens(messages: &MessagesRequest) -> i32 {
 
 fn argument_prefix(arguments: &str) -> String {
     arguments.chars().take(32).collect()
+}
+
+/// 诊断用：把任意 JSON 截断后转成字符串
+fn diag_json(value: Option<&Value>) -> String {
+    const LIMIT: usize = 32768;
+    let Some(value) = value else {
+        return "<none>".to_string();
+    };
+    let text = serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".to_string());
+    if text.len() > LIMIT {
+        format!("{}...<truncated,total={}>", &text[..LIMIT], text.len())
+    } else {
+        text
+    }
+}
+
+/// 诊断用：input 数组里每个 item 的 type，用来定位 tools 究竟从哪个 item 进来
+fn input_item_kinds(input: &Value) -> Vec<String> {
+    let Some(items) = input.as_array() else {
+        return vec![format!("<non-array:{}>", input_kind_name(input))];
+    };
+    items
+        .iter()
+        .map(|item| {
+            item.get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("<no-type>")
+                .to_string()
+        })
+        .collect()
+}
+
+fn input_kind_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 fn tool_summary(messages: &MessagesRequest) -> Vec<String> {
@@ -1966,6 +2149,27 @@ pub async fn post_responses(
         exec_command_requested,
         tools = ?tool_summary(&messages),
         "Responses request tool summary"
+    );
+    tracing::debug!(
+        target: "kiro2cc_proxy::responses_diag",
+        response_id = %response_id,
+        raw_tools = %diag_json(
+            request
+                .tools
+                .as_ref()
+                .and_then(|tools| serde_json::to_value(tools).ok())
+                .as_ref()
+        ),
+        input_item_kinds = ?input_item_kinds(&request.input),
+        has_previous = request.previous_response_id.is_some(),
+        resolved_tools = %diag_json(
+            messages
+                .tools
+                .as_ref()
+                .and_then(|tools| serde_json::to_value(tools).ok())
+                .as_ref()
+        ),
+        "Responses request raw tools"
     );
     let snapshot = RequestSnapshot::from(&messages);
 
@@ -2796,5 +3000,161 @@ mod tests {
         assert!(output.contains("\"input\":\"pwd\""));
         assert!(!output.contains("response.function_call_arguments"));
         assert!(!output.contains("{\\\"input\\\":\\\"pwd\\\"}"));
+    }
+
+    #[test]
+    fn custom_tool_call_output_becomes_tool_result() {
+        let parsed = input_messages(&json!([
+            {
+                "type": "custom_tool_call",
+                "call_id": "call_1",
+                "name": "exec",
+                "input": "pwd"
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_1",
+                "output": "C:\\work"
+            }
+        ]))
+        .unwrap();
+
+        assert_eq!(parsed.messages.len(), 2);
+        assert_eq!(parsed.messages[0].role, "assistant");
+        assert_eq!(parsed.messages[1].role, "user");
+        assert_eq!(parsed.messages[0].content[0]["type"], "tool_use");
+        assert_eq!(parsed.messages[0].content[0]["id"], "call_1");
+        assert_eq!(parsed.messages[0].content[0]["input"], json!({"input": "pwd"}));
+        assert_eq!(parsed.messages[1].content[0]["type"], "tool_result");
+        assert_eq!(parsed.messages[1].content[0]["tool_use_id"], "call_1");
+        assert_eq!(parsed.messages[1].content[0]["content"], "C:\\work");
+    }
+
+    #[test]
+    fn custom_tool_call_item_reference_restores_tool_use() {
+        let stored = StoredConversation {
+            snapshot: RequestSnapshot::default(),
+            output_items: vec![StoredOutputItem {
+                id: "ctc_call_1".into(),
+                item: json!({
+                    "type": "custom_tool_call",
+                    "id": "ctc_call_1",
+                    "call_id": "call_1",
+                    "name": "exec",
+                    "input": "pwd"
+                }),
+            }],
+            expires_at: Instant::now() + Duration::from_secs(60),
+        };
+        let messages = referenced_messages(
+            &[StoredOutputItem {
+                id: "ctc_call_1".into(),
+                item: json!({"type": "item_reference", "id": "ctc_call_1"}),
+            }],
+            Some(&stored),
+        )
+        .unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "assistant");
+        assert_eq!(messages[0].content[0]["type"], "tool_use");
+        assert_eq!(messages[0].content[0]["id"], "call_1");
+        assert_eq!(messages[0].content[0]["input"], json!({"input": "pwd"}));
+    }
+
+    /// Codex 通过 additional_tools 下发 namespace 分组容器，真实工具在内层 tools。
+    /// 展开前容器本身会变成名为 functions 的空 schema 工具，模型只能回调这个壳。
+    #[test]
+    fn namespace_tools_are_flattened() {
+        let parsed = input_messages(&json!([
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "functions",
+                        "description": "",
+                        "tools": [
+                            {
+                                "type": "custom",
+                                "name": "exec",
+                                "description": "Run JavaScript",
+                                "format": {"type": "grammar", "syntax": "lark", "definition": "start: SOURCE"}
+                            },
+                            {
+                                "type": "function",
+                                "name": "wait",
+                                "description": "Wait for a cell",
+                                "strict": false,
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {"cell_id": {"type": "string"}},
+                                    "required": ["cell_id"]
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "type": "namespace",
+                        "name": "collaboration",
+                        "description": "Sub-agent tools",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "spawn_agent",
+                                "description": "Spawn an agent",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {"prompt": {"type": "string"}}
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}]
+            }
+        ]))
+        .unwrap();
+
+        let tools = function_tools(Some(&parsed.tools)).unwrap().unwrap();
+        let names = tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, vec!["exec", "wait", "spawn_agent"]);
+        assert!(!names.contains(&"functions"));
+        assert!(!names.contains(&"collaboration"));
+
+        // grammar 约束的 exec 映射为单字符串入参
+        let exec = tools.iter().find(|t| t.name == "exec").unwrap();
+        assert_eq!(exec.input_schema["properties"]["input"]["type"], "string");
+        // 普通 function 保留原 parameters
+        let wait = tools.iter().find(|t| t.name == "wait").unwrap();
+        assert_eq!(wait.input_schema["properties"]["cell_id"]["type"], "string");
+    }
+
+    #[test]
+    fn duplicate_tool_names_keep_first_definition() {
+        let tools = function_tools(Some(&[
+            json!({
+                "type": "function",
+                "name": "wait",
+                "description": "first",
+                "parameters": {"type": "object", "properties": {}}
+            }),
+            json!({
+                "type": "function",
+                "name": "wait",
+                "description": "second",
+                "parameters": {"type": "object", "properties": {}}
+            }),
+        ]))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].description, "first");
     }
 }
