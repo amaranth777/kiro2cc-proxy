@@ -708,10 +708,9 @@ fn derive_agent_continuation_id(conversation_id: &str) -> String {
     )
 }
 
-/// 为无 metadata 的第三方客户端从 system 文本 + 工具名集合派生稳定的 conversation UUID。
-/// 相同的 system+tools 组合总是产生相同的 UUID，实现 sticky 路由和跨轮次缓存冻结。
-/// 当 system 和 tools 都为空时返回 None（退化为完全随机 UUID）。
-fn derive_fallback_conversation_id(req: &MessagesRequest) -> Option<String> {
+/// 为 system 文本 + 工具名集合派生稳定的缓存前缀指纹。
+/// 相同的 system+tools 组合总是产生相同的指纹，但它不能作为会话身份使用。
+fn derive_prefix_fingerprint(req: &MessagesRequest) -> Option<String> {
     let system_seed = req
         .system
         .as_ref()
@@ -741,22 +740,32 @@ fn derive_fallback_conversation_id(req: &MessagesRequest) -> Option<String> {
         None => &system_normalized,
     };
     let mut hasher = Sha256::new();
-    hasher.update(b"fallback-conversation:");
+    hasher.update(b"cache-prefix:");
     hasher.update(system_truncated.as_bytes());
     hasher.update(b"|tools=");
     for name in &tool_names {
         hasher.update(name.as_bytes());
         hasher.update(b",");
     }
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// 将外部提供的 session 标识转换为 Kiro 接受的 UUID。
+/// 已经是 UUID 的值保持不变；其他短标识通过 SHA-256 稳定映射。
+fn derive_conversation_id(session_id: &str) -> String {
+    if is_valid_uuid(session_id) {
+        return session_id.to_string();
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"session-conversation:");
+    hasher.update(session_id.as_bytes());
     let result = hasher.finalize();
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&result[..16]);
-    // 强制设置 UUID v4 的 Version (4) 和 Variant (8/9/A/B) 位
-    // 确保上游严格的 UUID 解析器不会将其拒绝为非法格式 (400 Bad Request)
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-
-    Some(uuid::Uuid::from_bytes(bytes).to_string())
+    Uuid::from_bytes(bytes).to_string()
 }
 
 /// 收集历史消息中使用的所有工具名称
@@ -796,8 +805,17 @@ fn create_placeholder_tool(name: &str) -> Tool {
     }
 }
 
-/// 将 Anthropic 请求转换为 Kiro 请求
+/// 将 Anthropic 请求转换为 Kiro 请求。
 pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, ConversionError> {
+    convert_request_with_session(req, None)
+}
+
+/// 将 Anthropic 请求转换为 Kiro 请求，并使用可选的外部会话标识。
+/// 会话身份与 system/tools 缓存前缀分离，避免不同客户端共享 continuation。
+pub fn convert_request_with_session(
+    req: &MessagesRequest,
+    session_id: Option<&str>,
+) -> Result<ConversionResult, ConversionError> {
     // 1. 映射模型
     let model_id = map_model(&req.model)
         .ok_or_else(|| ConversionError::UnsupportedModel(req.model.clone()))?;
@@ -821,40 +839,30 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
         &req.messages
     };
 
-    // 3. 生成会话 ID 和代理 ID
-    // 优先级：
-    //   1. 无 history 的单轮请求（cron job / subagent）→ system+tools SHA-256 派生稳定 ID
-    //      相同 system prompt 的单轮请求共享同一 conversationId，复用 Kiro 服务端 prompt cache
-    //   2. 有 history 的多轮请求 → metadata.user_id 中的 session UUID（Claude Code 标准格式）
-    //   3. system + 工具名集合的 SHA-256 派生（无 metadata 的第三方客户端）
-    //   4. 完全随机 UUID（仅当无 system 也无工具时）
-    let is_single_turn = messages.len() <= 1; // 只有当前 user 消息，无 history
-    let conversation_id = if is_single_turn {
-        // 单轮请求：优先用 system 派生，让所有 cron/subagent 落在同一 session
-        derive_fallback_conversation_id(req)
-            .or_else(|| {
-                req.metadata
-                    .as_ref()
-                    .and_then(|m| m.user_id.as_ref())
-                    .and_then(|user_id| extract_session_id(user_id))
-            })
-            .unwrap_or_else(|| Uuid::new_v4().to_string())
-    } else {
-        // 多轮请求：优先保持 metadata session UUID，保证对话连续性
-        req.metadata
-            .as_ref()
-            .and_then(|m| m.user_id.as_ref())
-            .and_then(|user_id| extract_session_id(user_id))
-            .or_else(|| derive_fallback_conversation_id(req))
-            .unwrap_or_else(|| Uuid::new_v4().to_string())
-    };
-    // agentContinuationId 基于 conversationId 派生，保持同一会话内稳定
-    // 这样 Kiro 后端能识别连续请求，对历史消息做跨请求 prompt caching
+    // 3. 生成会话 ID 和代理 ID。缓存前缀指纹不参与会话身份。
+    // metadata.user_id 是 Claude Code 的可靠会话来源；显式 session_id
+    // 作为无 metadata 客户端的补充；两者都没有时每次请求随机隔离。
+    let metadata_session_id = req
+        .metadata
+        .as_ref()
+        .and_then(|m| m.user_id.as_ref())
+        .and_then(|user_id| extract_session_id(user_id));
+    let conversation_id = metadata_session_id
+        .or_else(|| {
+            session_id
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(derive_conversation_id)
+        })
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let prefix_fingerprint = derive_prefix_fingerprint(req);
+    // agentContinuationId 基于独立 conversationId 派生，保持同一会话内稳定。
     let agent_continuation_id = derive_agent_continuation_id(&conversation_id);
     tracing::info!(
-        "[session] conversationId={} agentContinuationId={} (同一会话的连续请求这两个值应保持不变)",
+        "[session] conversationId={} agentContinuationId={} prefixFingerprint={:?} (同一会话的连续请求这两个值应保持不变)",
         conversation_id,
-        agent_continuation_id
+        agent_continuation_id,
+        prefix_fingerprint
     );
 
     // 4. 确定触发类型
@@ -3279,7 +3287,7 @@ mod tests {
 
     #[test]
     fn test_agent_continuation_id_random_when_no_metadata() {
-        use super::super::types::Message as AnthropicMessage;
+        use super::super::types::{Message as AnthropicMessage, SystemMessage, Tool};
 
         let make_req = || MessagesRequest {
             model: "claude-sonnet-4".to_string(),
@@ -3289,8 +3297,17 @@ mod tests {
                 content: serde_json::json!("Hello"),
             }],
             stream: false,
-            system: None,
-            tools: None,
+            system: Some(vec![SystemMessage {
+                text: "stable system prompt".to_string(),
+            }]),
+            tools: Some(vec![Tool {
+                tool_type: None,
+                name: "Read".to_string(),
+                description: "Read a file".to_string(),
+                input_schema: Default::default(),
+                max_uses: None,
+                defer_loading: None,
+            }]),
             tool_choice: None,
             thinking: None,
             output_config: None,
@@ -3309,6 +3326,77 @@ mod tests {
             result2.conversation_state.agent_continuation_id,
             "无 metadata 时 agentContinuationId 应该随机（每次不同）"
         );
+    }
+
+    #[test]
+    fn test_explicit_session_id_is_stable_without_metadata() {
+        use super::super::types::{Message as AnthropicMessage, SystemMessage};
+
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 1024,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Hello"),
+            }],
+            stream: false,
+            system: Some(vec![SystemMessage {
+                text: "stable system prompt".to_string(),
+            }]),
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let result1 = convert_request_with_session(&req, Some("client-session-1")).unwrap();
+        let result2 = convert_request_with_session(&req, Some("client-session-1")).unwrap();
+        let result3 = convert_request_with_session(&req, Some("client-session-2")).unwrap();
+
+        assert_eq!(
+            result1.conversation_state.conversation_id,
+            result2.conversation_state.conversation_id
+        );
+        assert_eq!(
+            result1.conversation_state.agent_continuation_id,
+            result2.conversation_state.agent_continuation_id
+        );
+        assert_ne!(
+            result1.conversation_state.conversation_id,
+            result3.conversation_state.conversation_id
+        );
+        assert_ne!(
+            result1.conversation_state.agent_continuation_id,
+            result3.conversation_state.agent_continuation_id
+        );
+    }
+
+    #[test]
+    fn test_metadata_session_takes_precedence_over_explicit_session_id() {
+        use super::super::types::{Message as AnthropicMessage, Metadata};
+
+        let metadata_session = "a0662283-7fd3-4399-a7eb-52b9a717ae88";
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 1024,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Hello"),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: Some(Metadata {
+                user_id: Some(format!("user_account__session_{metadata_session}")),
+            }),
+        };
+
+        let result = convert_request_with_session(&req, Some("other-session")).unwrap();
+        assert_eq!(result.conversation_state.conversation_id, metadata_session);
     }
 
     #[test]

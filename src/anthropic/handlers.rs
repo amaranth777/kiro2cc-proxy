@@ -13,7 +13,7 @@ use axum::{
     Extension, Json as JsonExtractor,
     body::Body,
     extract::State,
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json, Response},
 };
 use bytes::Bytes;
@@ -23,7 +23,7 @@ use std::time::Duration;
 use tokio::time::{Instant, interval_at};
 use uuid::Uuid;
 
-use super::converter::{ConversionError, convert_request};
+use super::converter::{ConversionError, convert_request_with_session};
 use super::middleware::{ApiKeyContext, AppState};
 use super::stream::{BufferedStreamContext, SseEvent, StreamContext};
 use super::types::{
@@ -363,7 +363,8 @@ pub async fn post_messages(
     }
 
     // 转换请求
-    let conversion_result = match convert_request(&payload) {
+    let conversion_result =
+        match convert_request_with_session(&payload, explicit_session_id(&headers)) {
         Ok(result) => result,
         Err(e) => {
             let (error_type, message) = match &e {
@@ -1058,6 +1059,18 @@ fn apply_default_thinking(payload: &mut MessagesRequest) {
     }
 }
 
+/// 从请求头读取可选的稳定会话标识。
+/// metadata.user_id 由转换器优先使用；这些 header 只为不携带 metadata
+/// 的第三方客户端提供跨请求 continuation。值本身不记录在日志中。
+fn explicit_session_id(headers: &HeaderMap) -> Option<&str> {
+    ["x-kiro-session-id", "x-session-id"]
+        .iter()
+        .find_map(|name| headers.get(*name))
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 /// POST /v1/messages/count_tokens
 ///
 /// 计算消息的 token 数量
@@ -1152,7 +1165,8 @@ pub async fn post_messages_cc(
     }
 
     // 转换请求
-    let conversion_result = match convert_request(&payload) {
+    let conversion_result =
+        match convert_request_with_session(&payload, explicit_session_id(&headers)) {
         Ok(result) => result,
         Err(e) => {
             let (error_type, message) = match &e {
