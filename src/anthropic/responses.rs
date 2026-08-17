@@ -250,7 +250,10 @@ fn image_block(image_url: &Value) -> Result<Value, String> {
         .strip_prefix("data:")
         .and_then(|value| value.strip_suffix(";base64"))
         .ok_or("input_image data URL must be base64")?;
-    if !matches!(media_type, "image/jpeg" | "image/png" | "image/gif" | "image/webp") {
+    if !matches!(
+        media_type,
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+    ) {
         return Err(format!("unsupported input_image media type: {media_type}"));
     }
     base64::engine::general_purpose::STANDARD
@@ -402,7 +405,10 @@ fn input_messages(input: &Value) -> Result<ParsedInput, String> {
     let items = input.as_array().ok_or("input must be a string or array")?;
     let mut parsed = ParsedInput::default();
     for item in items {
-        let kind = item.get("type").and_then(Value::as_str).unwrap_or("message");
+        let kind = item
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("message");
         match kind {
             "message" => {
                 let role = item
@@ -567,12 +573,12 @@ fn input_messages(input: &Value) -> Result<ParsedInput, String> {
                 "assistant",
                 json!([{"type": "text", "text": item_to_context_text(kind, item)}]),
             )),
-            "computer_call_output"
-            | "local_shell_call_output"
-            | "mcp_approval_response" => push_user_block(
-                &mut parsed.messages,
-                json!({"type": "text", "text": item_to_context_text(kind, item)}),
-            ),
+            "computer_call_output" | "local_shell_call_output" | "mcp_approval_response" => {
+                push_user_block(
+                    &mut parsed.messages,
+                    json!({"type": "text", "text": item_to_context_text(kind, item)}),
+                )
+            }
             _ => return Err(format!("unsupported input item type: {kind}")),
         }
     }
@@ -609,7 +615,10 @@ fn function_tools(tools: Option<&[Value]>) -> Result<Option<Vec<Tool>>, String> 
     let mut seen: Vec<String> = Vec::new();
     let mut result = Vec::new();
     for tool in &tools {
-        let tool_type = tool.get("type").and_then(Value::as_str).unwrap_or("function");
+        let tool_type = tool
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("function");
         let function = tool.get("function").filter(|value| value.is_object());
         let raw_name = tool
             .get("name")
@@ -646,21 +655,23 @@ fn function_tools(tools: Option<&[Value]>) -> Result<Option<Vec<Tool>>, String> 
                 "additionalProperties": false
             })
         } else {
-            tool
-                .get("parameters")
+            tool.get("parameters")
                 .or_else(|| function.and_then(|value| value.get("parameters")))
                 .or_else(|| tool.get("input_schema"))
                 .or_else(|| tool.get("schema"))
                 .cloned()
-                .map_or_else(|| default_tool_parameters(tool_type), |value| {
-                    if value.is_object() {
-                        value
-                    } else if tool_type == "function" {
-                        json!(null)
-                    } else {
-                        default_tool_parameters(tool_type)
-                    }
-                })
+                .map_or_else(
+                    || default_tool_parameters(tool_type),
+                    |value| {
+                        if value.is_object() {
+                            value
+                        } else if tool_type == "function" {
+                            json!(null)
+                        } else {
+                            default_tool_parameters(tool_type)
+                        }
+                    },
+                )
         };
         if parameters.is_null() {
             return Err("function.parameters must be an object".into());
@@ -737,10 +748,7 @@ fn output_config_from_format(format: Option<&Value>) -> Result<Option<OutputConf
     let Some(format) = format else {
         return Ok(None);
     };
-    let kind = format
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("text");
+    let kind = format.get("type").and_then(Value::as_str).unwrap_or("text");
     match kind {
         "text" => Ok(None),
         "json_object" => Ok(Some(OutputConfig {
@@ -906,7 +914,10 @@ fn to_messages(
         .as_ref()
         .map(|stored| stored.snapshot.messages.clone())
         .unwrap_or_default();
-    messages.extend(referenced_messages(&parsed.output_items, previous.as_ref())?);
+    messages.extend(referenced_messages(
+        &parsed.output_items,
+        previous.as_ref(),
+    )?);
     messages.extend(parsed.messages);
     if messages.is_empty() {
         return Err("input must contain a message or usable item".into());
@@ -962,12 +973,7 @@ struct ResponseAccumulator {
 }
 
 impl ResponseAccumulator {
-    fn new(
-        id: String,
-        model: String,
-        input_tokens: i32,
-        exec_command_requested: bool,
-    ) -> Self {
+    fn new(id: String, model: String, input_tokens: i32, exec_command_requested: bool) -> Self {
         Self {
             id,
             model,
@@ -1139,13 +1145,15 @@ fn function_call_item(tool: &ToolState, status: &str) -> Value {
 }
 
 fn custom_tool_input_complete(arguments: &str) -> Option<String> {
-    serde_json::from_str::<Value>(arguments).ok().and_then(|value| {
-        value
-            .get("input")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| value.as_str().map(str::to_string))
-    })
+    serde_json::from_str::<Value>(arguments)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("input")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| value.as_str().map(str::to_string))
+        })
 }
 
 fn custom_tool_input(arguments: &str) -> String {
@@ -1260,7 +1268,10 @@ fn sse(event: &str, data: Value) -> Bytes {
 
 fn numbered_sse(markers: &mut StreamMarkers, event: &str, mut data: Value) -> Bytes {
     if let Value::Object(object) = &mut data {
-        object.insert("sequence_number".to_string(), json!(markers.sequence_number));
+        object.insert(
+            "sequence_number".to_string(),
+            json!(markers.sequence_number),
+        );
     }
     markers.sequence_number += 1;
     sse(event, data)
@@ -1269,7 +1280,9 @@ fn numbered_sse(markers: &mut StreamMarkers, event: &str, mut data: Value) -> By
 fn process_event(acc: &mut ResponseAccumulator, event: Event) {
     match event {
         Event::AssistantResponse(response) => acc.push_assistant(&response.content),
-        Event::ToolUse(tool) => acc.push_tool(&tool.name, &tool.tool_use_id, &tool.input, tool.stop),
+        Event::ToolUse(tool) => {
+            acc.push_tool(&tool.name, &tool.tool_use_id, &tool.input, tool.stop)
+        }
         Event::Metering(metering) => {
             acc.metering_usage = Some(metering.usage);
             acc.cached_tokens = metering.cache_read_input_tokens.unwrap_or(0);
@@ -1449,11 +1462,7 @@ fn has_exec_command_tool(messages: &MessagesRequest) -> bool {
         .is_some_and(|tools| tools.iter().any(|tool| tool.name == "exec_command"))
 }
 
-fn normalize_tool_name(
-    name: &str,
-    exec_command_requested: bool,
-    arguments: &str,
-) -> String {
+fn normalize_tool_name(name: &str, exec_command_requested: bool, arguments: &str) -> String {
     if name == "exec"
         && (exec_command_requested
             || arguments.trim_start().starts_with("{\"cmd\"")
@@ -1506,12 +1515,8 @@ async fn execute_non_stream(
         .bytes()
         .await
         .map_err(|error| error_response(StatusCode::BAD_GATEWAY, error.to_string()))?;
-    let mut accumulator = ResponseAccumulator::new(
-        response_id,
-        model,
-        input_tokens,
-        exec_command_requested,
-    );
+    let mut accumulator =
+        ResponseAccumulator::new(response_id, model, input_tokens, exec_command_requested);
     parse_events(&bytes, &mut accumulator);
     accumulator.finish();
     Ok((accumulator, credential_id))
@@ -1531,11 +1536,7 @@ fn chat_to_messages(req: &ChatCompletionRequest) -> Result<MessagesRequest, Stri
     for item in &req.messages {
         match item.role.as_str() {
             "system" | "developer" => {
-                let text = item
-                    .content
-                    .as_ref()
-                    .map(text_content)
-                    .unwrap_or_default();
+                let text = item.content.as_ref().map(text_content).unwrap_or_default();
                 if !text.is_empty() {
                     system.push(SystemMessage { text });
                 }
@@ -1850,7 +1851,9 @@ fn collect_reasoning_stream_events(
     markers: &mut StreamMarkers,
     final_chunk: bool,
 ) -> Vec<Result<Bytes, Infallible>> {
-    if acc.reasoning.is_empty() { return Vec::new(); }
+    if acc.reasoning.is_empty() {
+        return Vec::new();
+    }
     let output_index = match markers.reasoning_output_index {
         Some(index) => index,
         None => {
@@ -1886,7 +1889,9 @@ fn tool_output_index(markers: &mut StreamMarkers, call_id: &str) -> usize {
     }
     let index = markers.next_output_index;
     markers.next_output_index += 1;
-    markers.tool_output_indices.insert(call_id.to_string(), index);
+    markers
+        .tool_output_indices
+        .insert(call_id.to_string(), index);
     index
 }
 
@@ -1895,7 +1900,9 @@ fn collect_text_stream_events(
     markers: &mut StreamMarkers,
     final_chunk: bool,
 ) -> Vec<Result<Bytes, Infallible>> {
-    if acc.text.is_empty() { return Vec::new(); }
+    if acc.text.is_empty() {
+        return Vec::new();
+    }
     let output_index = match markers.text_output_index {
         Some(index) => index,
         None => {
@@ -2002,7 +2009,8 @@ fn collect_tool_stream_events(
                     "status": "in_progress"
                 })
             };
-            events.push(Ok(numbered_sse(markers,
+            events.push(Ok(numbered_sse(
+                markers,
                 "response.output_item.added",
                 json!({
                     "type": "response.output_item.added",
@@ -2089,7 +2097,8 @@ fn collect_tool_stream_events(
             } else {
                 function_call_item(tool, "completed")
             };
-            events.push(Ok(numbered_sse(markers,
+            events.push(Ok(numbered_sse(
+                markers,
                 "response.output_item.done",
                 json!({
                     "type": "response.output_item.done",
@@ -2126,7 +2135,10 @@ pub async fn post_responses(
         Err(response) => return response,
     };
     let Some(provider) = state.kiro_provider.clone() else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "Kiro API provider not configured");
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Kiro API provider not configured",
+        );
     };
     if let Some(rpm) = &state.rpm_tracker {
         rpm.record_request(identity.as_ref().map(|context| context.0.id));
@@ -2249,7 +2261,10 @@ pub async fn post_chat_completions(
         Err(response) => return response,
     };
     let Some(provider) = state.kiro_provider.clone() else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "Kiro API provider not configured");
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Kiro API provider not configured",
+        );
     };
     if let Some(rpm) = &state.rpm_tracker {
         rpm.record_request(identity.as_ref().map(|context| context.0.id));
@@ -2328,7 +2343,10 @@ pub async fn post_completions(
         Err(response) => return response,
     };
     let Some(provider) = state.kiro_provider.clone() else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "Kiro API provider not configured");
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Kiro API provider not configured",
+        );
     };
     if let Some(rpm) = &state.rpm_tracker {
         rpm.record_request(identity.as_ref().map(|context| context.0.id));
@@ -2398,7 +2416,8 @@ async fn stream_response(
     usage_tracker: Option<Arc<UsageTracker>>,
     api_key_id: Option<u32>,
 ) -> Response {
-    let (response, credential_id) = match provider.call_api_stream(&request_body, &bound_ids).await {
+    let (response, credential_id) = match provider.call_api_stream(&request_body, &bound_ids).await
+    {
         Ok(response) => response,
         Err(error) => return error_response(StatusCode::BAD_GATEWAY, error.to_string()),
     };
@@ -2481,8 +2500,16 @@ async fn stream_response(
                             Err(error) => tracing::warn!(%error, "Responses 流式帧解析失败"),
                         }
                     }
-                    events.extend(collect_reasoning_stream_events(&accumulator, &mut markers, false));
-                    events.extend(collect_text_stream_events(&accumulator, &mut markers, false));
+                    events.extend(collect_reasoning_stream_events(
+                        &accumulator,
+                        &mut markers,
+                        false,
+                    ));
+                    events.extend(collect_text_stream_events(
+                        &accumulator,
+                        &mut markers,
+                        false,
+                    ));
                     events.extend(collect_tool_stream_events(&accumulator, &mut markers));
                     Some((
                         stream::iter(events),
@@ -2540,7 +2567,11 @@ async fn stream_response(
                     }
                     record_usage(&usage_tracker, api_key_id, credential_id, &accumulator);
                     let mut events: Vec<Result<Bytes, Infallible>> = Vec::new();
-                    events.extend(collect_reasoning_stream_events(&accumulator, &mut markers, true));
+                    events.extend(collect_reasoning_stream_events(
+                        &accumulator,
+                        &mut markers,
+                        true,
+                    ));
                     events.extend(collect_text_stream_events(&accumulator, &mut markers, true));
                     events.extend(collect_tool_stream_events(&accumulator, &mut markers));
                     let body = response_body(&accumulator);
@@ -2549,7 +2580,8 @@ async fn stream_response(
                     } else {
                         "response.completed"
                     };
-                    events.push(Ok(numbered_sse(&mut markers,
+                    events.push(Ok(numbered_sse(
+                        &mut markers,
                         event_name,
                         json!({"type": event_name, "response": body}),
                     )));
@@ -2594,7 +2626,8 @@ async fn chat_stream_response(
     usage_tracker: Option<Arc<UsageTracker>>,
     api_key_id: Option<u32>,
 ) -> Response {
-    let (response, credential_id) = match provider.call_api_stream(&request_body, &bound_ids).await {
+    let (response, credential_id) = match provider.call_api_stream(&request_body, &bound_ids).await
+    {
         Ok(response) => response,
         Err(error) => return error_response(StatusCode::BAD_GATEWAY, error.to_string()),
     };
@@ -2766,7 +2799,8 @@ async fn completion_stream_response(
     usage_tracker: Option<Arc<UsageTracker>>,
     api_key_id: Option<u32>,
 ) -> Response {
-    let (response, credential_id) = match provider.call_api_stream(&request_body, &bound_ids).await {
+    let (response, credential_id) = match provider.call_api_stream(&request_body, &bound_ids).await
+    {
         Ok(response) => response,
         Err(error) => return error_response(StatusCode::BAD_GATEWAY, error.to_string()),
     };
@@ -2926,9 +2960,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(tools[0].name, "exec");
-        assert_eq!(tools[0].input_schema.get("required"), Some(&json!(["input"])));
+        assert_eq!(
+            tools[0].input_schema.get("required"),
+            Some(&json!(["input"]))
+        );
         assert!(tools[0].input_schema.contains_key("properties"));
-        assert_eq!(tools[0].input_schema["properties"]["input"]["type"], "string");
+        assert_eq!(
+            tools[0].input_schema["properties"]["input"]["type"],
+            "string"
+        );
     }
 
     #[test]
@@ -2953,7 +2993,10 @@ mod tests {
         assert_eq!(normalize_tool_name("exec", true, "{}"), "exec_command");
         assert_eq!(normalize_tool_name("exec", false, "{}"), "exec");
         assert_eq!(normalize_tool_name("lookup", true, "{}"), "lookup");
-        assert_eq!(normalize_tool_name("exec", false, "{\"cmd\":"), "exec_command");
+        assert_eq!(
+            normalize_tool_name("exec", false, "{\"cmd\":"),
+            "exec_command"
+        );
     }
 
     #[test]
@@ -2969,7 +3012,10 @@ mod tests {
         assert_eq!(accumulator.tools[0].arguments, "{\"cmd\":\"pwd\"}");
         assert!(accumulator.tools[0].done);
         assert_eq!(accumulator.tools[1].name, "lookup");
-        assert_eq!(function_call_item(&accumulator.tools[0], "completed")["name"], "exec_command");
+        assert_eq!(
+            function_call_item(&accumulator.tools[0], "completed")["name"],
+            "exec_command"
+        );
     }
 
     #[test]
@@ -3024,7 +3070,10 @@ mod tests {
         assert_eq!(parsed.messages[1].role, "user");
         assert_eq!(parsed.messages[0].content[0]["type"], "tool_use");
         assert_eq!(parsed.messages[0].content[0]["id"], "call_1");
-        assert_eq!(parsed.messages[0].content[0]["input"], json!({"input": "pwd"}));
+        assert_eq!(
+            parsed.messages[0].content[0]["input"],
+            json!({"input": "pwd"})
+        );
         assert_eq!(parsed.messages[1].content[0]["type"], "tool_result");
         assert_eq!(parsed.messages[1].content[0]["tool_use_id"], "call_1");
         assert_eq!(parsed.messages[1].content[0]["content"], "C:\\work");

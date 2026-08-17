@@ -365,24 +365,24 @@ pub async fn post_messages(
     // 转换请求
     let conversion_result =
         match convert_request_with_session(&payload, explicit_session_id(&headers)) {
-        Ok(result) => result,
-        Err(e) => {
-            let (error_type, message) = match &e {
-                ConversionError::UnsupportedModel(model) => {
-                    ("invalid_request_error", format!("模型不支持: {}", model))
-                }
-                ConversionError::EmptyMessages => {
-                    ("invalid_request_error", "消息列表为空".to_string())
-                }
-            };
-            tracing::warn!("请求转换失败: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new(error_type, message)),
-            )
-                .into_response();
-        }
-    };
+            Ok(result) => result,
+            Err(e) => {
+                let (error_type, message) = match &e {
+                    ConversionError::UnsupportedModel(model) => {
+                        ("invalid_request_error", format!("模型不支持: {}", model))
+                    }
+                    ConversionError::EmptyMessages => {
+                        ("invalid_request_error", "消息列表为空".to_string())
+                    }
+                };
+                tracing::warn!("请求转换失败: {}", e);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse::new(error_type, message)),
+                )
+                    .into_response();
+            }
+        };
 
     // 构建 Kiro 请求
     let kiro_request = KiroRequest {
@@ -1167,24 +1167,24 @@ pub async fn post_messages_cc(
     // 转换请求
     let conversion_result =
         match convert_request_with_session(&payload, explicit_session_id(&headers)) {
-        Ok(result) => result,
-        Err(e) => {
-            let (error_type, message) = match &e {
-                ConversionError::UnsupportedModel(model) => {
-                    ("invalid_request_error", format!("模型不支持: {}", model))
-                }
-                ConversionError::EmptyMessages => {
-                    ("invalid_request_error", "消息列表为空".to_string())
-                }
-            };
-            tracing::warn!("请求转换失败: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new(error_type, message)),
-            )
-                .into_response();
-        }
-    };
+            Ok(result) => result,
+            Err(e) => {
+                let (error_type, message) = match &e {
+                    ConversionError::UnsupportedModel(model) => {
+                        ("invalid_request_error", format!("模型不支持: {}", model))
+                    }
+                    ConversionError::EmptyMessages => {
+                        ("invalid_request_error", "消息列表为空".to_string())
+                    }
+                };
+                tracing::warn!("请求转换失败: {}", e);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse::new(error_type, message)),
+                )
+                    .into_response();
+            }
+        };
 
     // 构建 Kiro 请求
     let kiro_request = KiroRequest {

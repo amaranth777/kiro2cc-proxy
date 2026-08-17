@@ -368,7 +368,15 @@ impl ApiKeyManager {
             return Ok(());
         }
         let next_id = keys.iter().map(|k| k.id).max().unwrap_or(0) + 1;
-        let mut api_key = ApiKey::new(next_id, name.to_string(), None, None, default_limit_unit(), None, None);
+        let mut api_key = ApiKey::new(
+            next_id,
+            name.to_string(),
+            None,
+            None,
+            default_limit_unit(),
+            None,
+            None,
+        );
         api_key.key = key.to_string();
         api_key.activated_at = Some(Utc::now());
         keys.push(api_key);
@@ -392,7 +400,8 @@ mod tests {
     }
 
     fn temp_manager() -> (TempDirGuard, ApiKeyManager) {
-        let dir = std::env::temp_dir().join(format!("kiro2cc-api-key-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("kiro2cc-api-key-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("创建临时目录失败");
         let path = dir.join("api_keys.json");
         let manager = ApiKeyManager::load(&path).expect("加载空 ApiKeyManager 失败");
@@ -445,7 +454,16 @@ mod tests {
         let id = manager.list()[0].id;
         // 模拟用户在 Admin UI 里手动禁用/改名该 key
         manager
-            .update(id, Some("用户改名".to_string()), Some(false), None, None, None, None, None)
+            .update(
+                id,
+                Some("用户改名".to_string()),
+                Some(false),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .expect("更新固定 Key 失败");
 
         // 重新确保固定 Key 存在：不应覆盖用户已做的修改

@@ -138,9 +138,7 @@ mod tests {
         let address = listener.local_addr().expect("read test server address");
         let app = create_router_with_provider_and_state(AppState::new(), None, None);
         let server = tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve test router");
+            axum::serve(listener, app).await.expect("serve test router");
         });
 
         let response = reqwest::Client::builder()

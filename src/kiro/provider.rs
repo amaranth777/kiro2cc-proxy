@@ -80,8 +80,9 @@ impl KiroProvider {
         let tls_backend = token_manager.config().tls_backend;
         let ca_cert_path = token_manager.config().ca_cert_path.clone();
         // 预热：构建全局代理对应的 Client
-        let initial_client = build_client(proxy.as_ref(), 180, tls_backend, ca_cert_path.as_deref())
-            .expect("创建 HTTP 客户端失败");
+        let initial_client =
+            build_client(proxy.as_ref(), 180, tls_backend, ca_cert_path.as_deref())
+                .expect("创建 HTTP 客户端失败");
         let mut cache = HashMap::new();
         cache.insert(proxy.clone(), initial_client);
 

@@ -213,7 +213,12 @@ async fn refresh_social_token(
     let machine_id = machine_id::generate_from_credentials(credentials, config);
     let kiro_version = &config.kiro_version;
 
-    let client = build_client(proxy, 60, config.tls_backend, config.ca_cert_path.as_deref())?;
+    let client = build_client(
+        proxy,
+        60,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
     let body = RefreshRequest {
         refresh_token: refresh_token.to_string(),
     };
@@ -331,7 +336,12 @@ async fn refresh_idc_token(
     };
     let refresh_url = format!("https://oidc.{}.amazonaws.com/token", region);
 
-    let client = build_client(proxy, 60, config.tls_backend, config.ca_cert_path.as_deref())?;
+    let client = build_client(
+        proxy,
+        60,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
     let body = IdcRefreshRequest {
         client_id: client_id.to_string(),
         client_secret: client_secret.to_string(),
@@ -514,7 +524,12 @@ pub(crate) async fn get_usage_limits(
         USAGE_LIMITS_AMZ_USER_AGENT_PREFIX, kiro_version, machine_id
     );
 
-    let client = build_client(proxy, 60, config.tls_backend, config.ca_cert_path.as_deref())?;
+    let client = build_client(
+        proxy,
+        60,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
 
     let response = client
         .get(&url)
@@ -567,7 +582,12 @@ pub(crate) async fn list_available_models(
         body["profileArn"] = serde_json::Value::String(profile_arn.clone());
     }
 
-    let client = build_client(proxy, 15, config.tls_backend, config.ca_cert_path.as_deref())?;
+    let client = build_client(
+        proxy,
+        15,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
 
     let response = client
         .post(&url)
@@ -905,7 +925,8 @@ impl MultiTokenManager {
                     id
                 });
                 if cred.machine_id.is_none() {
-                    cred.machine_id = Some(machine_id::generate_from_credentials(&cred, config_ref));
+                    cred.machine_id =
+                        Some(machine_id::generate_from_credentials(&cred, config_ref));
                     has_new_machine_ids = true;
                 }
                 CredentialEntry {
@@ -2999,7 +3020,8 @@ mod tests {
 
     #[test]
     fn test_is_invalid_grant_response_matches_400_with_expected_body() {
-        let body = r#"{"error":"invalid_grant","error_description":"Invalid refresh token provided"}"#;
+        let body =
+            r#"{"error":"invalid_grant","error_description":"Invalid refresh token provided"}"#;
         assert!(is_invalid_grant_response(400, body));
     }
 
@@ -3011,7 +3033,8 @@ mod tests {
 
     #[test]
     fn test_is_invalid_grant_response_rejects_non_400_status() {
-        let body = r#"{"error":"invalid_grant","error_description":"Invalid refresh token provided"}"#;
+        let body =
+            r#"{"error":"invalid_grant","error_description":"Invalid refresh token provided"}"#;
         assert!(!is_invalid_grant_response(401, body));
     }
 
@@ -3231,7 +3254,10 @@ mod tests {
             entry2.disabled,
             "InvalidRefreshToken 不应参与全灭自愈，需人工更换凭证"
         );
-        assert_eq!(entry2.disabled_reason, Some(DisabledReason::InvalidRefreshToken));
+        assert_eq!(
+            entry2.disabled_reason,
+            Some(DisabledReason::InvalidRefreshToken)
+        );
     }
 
     #[tokio::test]
@@ -3345,7 +3371,10 @@ mod tests {
         let entries = manager.entries.lock();
         let entry = entries.iter().find(|e| e.id == 1).unwrap();
         assert!(entry.disabled);
-        assert_eq!(entry.disabled_reason, Some(DisabledReason::InvalidRefreshToken));
+        assert_eq!(
+            entry.disabled_reason,
+            Some(DisabledReason::InvalidRefreshToken)
+        );
         assert_eq!(
             entry.refresh_failure_count, 0,
             "invalid_grant 是永久性失效，不应计入 refresh_failure_count"
@@ -3568,7 +3597,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_external_idp_invalid_grant_returns_typed_error() {
-        let body = r#"{"error":"invalid_grant","error_description":"Invalid refresh token provided"}"#;
+        let body =
+            r#"{"error":"invalid_grant","error_description":"Invalid refresh token provided"}"#;
         let endpoint = spawn_single_response_server(400, body).await;
 
         let credentials = KiroCredentials {
@@ -3851,7 +3881,8 @@ mod tests {
         let bound_id = ctx1.id;
 
         // 让已绑定账号的下一次刷新命中 invalid_grant
-        let body = r#"{"error":"invalid_grant","error_description":"Invalid refresh token provided"}"#;
+        let body =
+            r#"{"error":"invalid_grant","error_description":"Invalid refresh token provided"}"#;
         let endpoint = spawn_single_response_server(400, body).await;
         {
             let mut entries = manager.entries.lock();
@@ -3873,7 +3904,10 @@ mod tests {
         let entries = manager.entries.lock();
         let entry = entries.iter().find(|e| e.id == bound_id).unwrap();
         assert!(entry.disabled);
-        assert_eq!(entry.disabled_reason, Some(DisabledReason::InvalidRefreshToken));
+        assert_eq!(
+            entry.disabled_reason,
+            Some(DisabledReason::InvalidRefreshToken)
+        );
         assert_eq!(
             entry.refresh_failure_count, 0,
             "invalid_grant 不应计入 refresh_failure_count"
@@ -4147,8 +4181,10 @@ mod tests {
         // 对称于 test_quota_disabled_reason_survives_restart：InvalidRefreshToken
         // 必须只落盘到 kiro_stats.json，重启后不退化为 Manual，否则违反"需人工介入才能
         // 恢复"的设计目标（覆盖 T13 白名单扩展）
-        let dir_guard =
-            TempDirGuard::new(&format!("k2cc_invalid_grant_restart_{}", std::process::id()));
+        let dir_guard = TempDirGuard::new(&format!(
+            "k2cc_invalid_grant_restart_{}",
+            std::process::id()
+        ));
         let cred_path = dir_guard.path().join("credentials.json");
 
         let mut seed = make_valid_cred("t1");
