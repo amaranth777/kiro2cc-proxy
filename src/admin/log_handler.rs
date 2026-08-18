@@ -58,9 +58,8 @@ pub async fn stream_logs(
                     };
                     return Some((Ok(Event::default().event("log").data(json)), rx));
                 }
-                Err(RecvError::Lagged(n)) => {
+                Err(RecvError::Lagged(_)) => {
                     // 广播通道溢出，跳过丢失的消息继续
-                    tracing::warn!("log SSE stream lagged by {} messages", n);
                     continue;
                 }
                 Err(RecvError::Closed) => return None,
