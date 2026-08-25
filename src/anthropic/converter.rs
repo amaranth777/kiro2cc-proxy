@@ -730,15 +730,9 @@ fn derive_prefix_fingerprint(req: &MessagesRequest) -> Option<String> {
     if system_seed.is_empty() && tool_names.is_empty() {
         return None;
     }
-    // ⚠️ HIGH-RISK: 归一化 system prompt，strip Hermes per-session 易变块，
-    // 使相同语义配置的不同 session 派生出相同 conversationId，提升跨会话缓存命中率。
+    // 归一化 system prompt，去除 per-session 易变块，保持同一语义前缀稳定。
     let system_normalized = normalize_system_for_cache_id(&system_seed);
-
-    // 仅取归一化后前 4096 字符，避免超长 prompt 导致 hash 计算过慢
-    let system_truncated: &str = match system_normalized.char_indices().nth(4096) {
-        Some((idx, _)) => &system_normalized[..idx],
-        None => &system_normalized,
-    };
+    let system_truncated = truncate_chars(&system_normalized, 4096);
     let mut hasher = Sha256::new();
     hasher.update(b"cache-prefix:");
     hasher.update(system_truncated.as_bytes());
@@ -748,6 +742,86 @@ fn derive_prefix_fingerprint(req: &MessagesRequest) -> Option<String> {
         hasher.update(b",");
     }
     Some(format!("{:x}", hasher.finalize()))
+}
+
+/// 按字符边界截断到最多 `max_chars` 个字符，避免超长文本拖慢 hash 计算。
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
+/// 从消息 content 中提取用于哈希的文本，累计到 `max_chars` 字符即停止。
+///
+/// 只取顶层 text 块，避免把图片或文档的 base64 数据纳入会话身份哈希。
+fn collect_text_for_hash(content: &serde_json::Value, max_chars: usize) -> String {
+    let mut out = String::new();
+    match content {
+        serde_json::Value::String(s) => out.push_str(truncate_chars(s, max_chars)),
+        serde_json::Value::Array(arr) => {
+            let mut remaining = max_chars;
+            for item in arr {
+                if remaining == 0 {
+                    break;
+                }
+                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                    let piece = truncate_chars(text, remaining);
+                    remaining -= piece.chars().count();
+                    out.push_str(piece);
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// 为无 metadata 的第三方客户端派生稳定的 conversation UUID。
+///
+/// 使用 system 文本、排序后的工具名集合和首条消息内容。不能把全部历史纳入
+/// 哈希，否则每轮请求都会改变会话 ID，导致 sticky 路由失效。
+fn derive_fallback_conversation_id(req: &MessagesRequest) -> Option<String> {
+    let system_seed = req
+        .system
+        .as_ref()
+        .map(|s| {
+            s.iter()
+                .map(|b| b.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    let mut tool_names: Vec<&str> = req
+        .tools
+        .as_deref()
+        .map(|tools| tools.iter().map(|t| t.name.as_str()).collect())
+        .unwrap_or_default();
+    tool_names.sort_unstable();
+    if system_seed.is_empty() && tool_names.is_empty() {
+        return None;
+    }
+    let first_message_seed = req
+        .messages
+        .first()
+        .map(|m| format!("{}:{}", m.role, collect_text_for_hash(&m.content, 4096)))
+        .unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(b"fallback-conversation:");
+    hasher.update(truncate_chars(&system_seed, 4096).as_bytes());
+    hasher.update(b"|tools=");
+    for name in &tool_names {
+        hasher.update(name.as_bytes());
+        hasher.update(b",");
+    }
+    hasher.update(b"|first=");
+    hasher.update(first_message_seed.as_bytes());
+    let result = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&result[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Some(Uuid::from_bytes(bytes).to_string())
 }
 
 /// 将外部提供的 session 标识转换为 Kiro 接受的 UUID。
@@ -840,28 +914,31 @@ pub fn convert_request_with_session(
     };
 
     // 3. 生成会话 ID 和代理 ID。缓存前缀指纹不参与会话身份。
-    // metadata.user_id 是 Claude Code 的可靠会话来源；显式 session_id
-    // 作为无 metadata 客户端的补充；两者都没有时每次请求随机隔离。
+    // 优先级：metadata.user_id → 显式 session_id → 无 metadata 的 fallback → 随机 UUID。
     let metadata_session_id = req
         .metadata
         .as_ref()
         .and_then(|m| m.user_id.as_ref())
         .and_then(|user_id| extract_session_id(user_id));
-    let conversation_id = metadata_session_id
+    let (conversation_id, id_source) = metadata_session_id
+        .map(|id| (id, "metadata"))
         .or_else(|| {
             session_id
                 .map(str::trim)
                 .filter(|id| !id.is_empty())
                 .map(derive_conversation_id)
+                .map(|id| (id, "session"))
         })
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+        .or_else(|| derive_fallback_conversation_id(req).map(|id| (id, "fallback")))
+        .unwrap_or_else(|| (Uuid::new_v4().to_string(), "random"));
     let prefix_fingerprint = derive_prefix_fingerprint(req);
     // agentContinuationId 基于独立 conversationId 派生，保持同一会话内稳定。
     let agent_continuation_id = derive_agent_continuation_id(&conversation_id);
     tracing::info!(
-        "[session] conversationId={} agentContinuationId={} prefixFingerprint={:?} (同一会话的连续请求这两个值应保持不变)",
+        "[session] conversationId={} agentContinuationId={} source={} prefixFingerprint={:?} (同一会话的连续请求这两个值应保持不变)",
         conversation_id,
         agent_continuation_id,
+        id_source,
         prefix_fingerprint
     );
 
@@ -2678,6 +2755,132 @@ mod tests {
 
         // session_ 后内容短于 36 字节也不应 panic
         assert_eq!(extract_session_id("session_短"), None);
+    }
+
+    /// 构造用于 fallback 派生测试的最小请求（system + 工具名 + 消息序列）
+    fn fallback_req(
+        system: Option<&str>,
+        tool_names: &[&str],
+        messages: &[(&str, &str)],
+    ) -> MessagesRequest {
+        use super::super::types::{Message as AnthropicMessage, SystemMessage, Tool};
+        MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 1024,
+            messages: messages
+                .iter()
+                .map(|(role, text)| AnthropicMessage {
+                    role: (*role).to_string(),
+                    content: serde_json::json!(*text),
+                })
+                .collect(),
+            stream: false,
+            system: system.map(|s| {
+                vec![SystemMessage {
+                    text: s.to_string(),
+                }]
+            }),
+            tools: if tool_names.is_empty() {
+                None
+            } else {
+                Some(
+                    tool_names
+                        .iter()
+                        .map(|name| Tool {
+                            tool_type: None,
+                            name: (*name).to_string(),
+                            description: String::new(),
+                            input_schema: Default::default(),
+                            max_uses: None,
+                            defer_loading: None,
+                        })
+                        .collect(),
+                )
+            },
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn test_derive_fallback_distinguishes_different_sessions() {
+        // 回归 issue #27：system 与工具集完全相同的两个会话，
+        // 旧实现会折叠成同一个 conversationId，导致 sticky 把全部流量钉在同一账号上
+        let a = fallback_req(
+            Some("You are Claude Code."),
+            &["Read", "Write"],
+            &[("user", "帮我看下 main.rs")],
+        );
+        let b = fallback_req(
+            Some("You are Claude Code."),
+            &["Read", "Write"],
+            &[("user", "帮我重构 token_manager")],
+        );
+        let id_a = derive_fallback_conversation_id(&a).expect("应派生出 ID");
+        let id_b = derive_fallback_conversation_id(&b).expect("应派生出 ID");
+        assert_ne!(id_a, id_b, "不同会话必须派生出不同的 conversationId");
+    }
+
+    #[test]
+    fn test_derive_fallback_stable_across_turns() {
+        // 同一会话的后续轮次追加历史消息，首条消息不变 → conversationId 必须保持稳定，
+        // 否则每轮都会重新绑定账号，sticky 与上游 prompt cache 全部失效
+        let turn1 = fallback_req(
+            Some("You are Claude Code."),
+            &["Read", "Write"],
+            &[("user", "帮我看下 main.rs")],
+        );
+        let turn3 = fallback_req(
+            Some("You are Claude Code."),
+            &["Read", "Write"],
+            &[
+                ("user", "帮我看下 main.rs"),
+                ("assistant", "已读取"),
+                ("user", "再看下 lib.rs"),
+            ],
+        );
+        assert_eq!(
+            derive_fallback_conversation_id(&turn1),
+            derive_fallback_conversation_id(&turn3),
+            "同一会话跨轮次的 conversationId 必须一致"
+        );
+    }
+
+    #[test]
+    fn test_derive_fallback_array_content_ignores_binary_blocks() {
+        // 数组型 content：只有顶层 text 块参与 seed，image 的 base64 数据不参与
+        let with_image = |data: &str, text: &str| {
+            let mut req = fallback_req(Some("You are Claude Code."), &["Read"], &[("user", text)]);
+            req.messages[0].content = serde_json::json!([
+                {"type": "text", "text": text},
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/png", "data": data
+                }},
+            ]);
+            req
+        };
+        // 文本相同、仅图片数据不同 → 判为同一会话
+        assert_eq!(
+            derive_fallback_conversation_id(&with_image("AAAA", "看这张图")),
+            derive_fallback_conversation_id(&with_image("BBBB", "看这张图")),
+            "仅附件不同不应改变会话身份"
+        );
+        // 文本不同 → 判为不同会话
+        assert_ne!(
+            derive_fallback_conversation_id(&with_image("AAAA", "看这张图")),
+            derive_fallback_conversation_id(&with_image("AAAA", "换个问题")),
+            "数组型 content 的文本变化必须体现在会话 ID 上"
+        );
+    }
+
+    #[test]
+    fn test_derive_fallback_none_without_system_and_tools() {
+        // 无 system 也无工具的裸请求缺乏客户端身份特征，
+        // 不应仅凭首条消息相同就判定为同一会话 → 返回 None 退化为随机 UUID
+        let req = fallback_req(None, &[], &[("user", "Hello")]);
+        assert_eq!(derive_fallback_conversation_id(&req), None);
     }
 
     #[test]

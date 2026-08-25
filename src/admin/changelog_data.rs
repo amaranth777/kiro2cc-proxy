@@ -58,13 +58,96 @@ fn fix_group(items: Vec<Bilingual>) -> ReleaseNoteGroup {
     }
 }
 
+/// 当前发布版本（来自 Cargo.toml 的 [package].version 字段），编译期常量
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// 构建更新日志列表，固定按版本号从新到旧声明（不做运行时排序）
+///
+/// `is_latest` 由 `CURRENT_VERSION` 与条目 `version` 比对自动设定，
+/// bump Cargo.toml 后无需手动改此标记。
 pub fn build_release_notes() -> Vec<ReleaseNote> {
-    vec![
+    let mut notes = vec![
+        ReleaseNote {
+            version: "3.0.1".to_string(),
+            date: "2026-08-21".to_string(),
+            is_latest: false,
+            groups: vec![
+                feat_group(vec![Bilingual::new(
+                    "新增 OpenAI 兼容端点 /v1/chat/completions 与 /v1/responses，支持 Codex CLI 与 OpenAI SDK 类客户端直接接入，用 Kiro 额度调用 GPT-5.6 系列模型",
+                    "Added OpenAI-compatible endpoints /v1/chat/completions and /v1/responses, letting Codex CLI and OpenAI SDK clients connect directly and run GPT-5.6 models on Kiro credits",
+                )]),
+                fix_group(vec![Bilingual::new(
+                    "修复 OpenAI 兼容端点流式转换中孤儿 tool_call 与 SSE 溢出日志的问题",
+                    "Fixed orphaned tool_call handling and SSE overflow logging in the OpenAI-compatible streaming conversion",
+                )]),
+            ],
+        },
+        ReleaseNote {
+            version: "2.10.2".to_string(),
+            date: "2026-08-20".to_string(),
+            is_latest: false,
+            groups: vec![
+                improve_group(vec![
+                    Bilingual::new(
+                        "/cc/v1/messages 改为实时流式转发，删除整段缓冲，首字延迟不再等待上游响应结束",
+                        "/cc/v1/messages now forwards the stream in real time; the full-response buffer is gone, so time-to-first-token no longer waits for the upstream to finish",
+                    ),
+                    Bilingual::new(
+                        "Admin/User 前端图标改用 Aurora Prism 方案，侧边栏 logo 随明暗主题切换",
+                        "Admin/User front-end icons switched to the Aurora Prism set; the sidebar logo follows the light/dark theme",
+                    ),
+                ]),
+                fix_group(vec![
+                    Bilingual::new(
+                        "上报给客户端的 output_tokens 解除 380 固定上限，并按来源排除 thinking 内容",
+                        "Client-facing output_tokens no longer capped at 380, and thinking content is excluded by source rather than by cap",
+                    ),
+                    Bilingual::new(
+                        "输出 token 估算改为累加字符数后统一取整，消除逐 chunk 向上取整的累积高估",
+                        "Output token estimation accumulates characters and rounds once at the end, removing the systematic overestimate from per-chunk rounding",
+                    ),
+                    Bilingual::new(
+                        "上下文超窗错误改用 Anthropic 官方文案格式，便于客户端识别并触发自动压缩重试",
+                        "Context-overflow errors now use Anthropic's official message format so clients can recognize them and trigger auto-compaction retries",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "2.10.0".to_string(),
+            date: "2026-08-19".to_string(),
+            is_latest: false,
+            groups: vec![
+                improve_group(vec![
+                    Bilingual::new(
+                        "Admin 后台全站 12 个页面按新设计稿改版，账号管理与 API Keys 改为表格化布局",
+                        "All 12 Admin console pages redesigned to the new visual spec; accounts and API Keys switched to a table layout",
+                    ),
+                    Bilingual::new(
+                        "实时日志页新增缓冲区/错误/警告指标卡、级别分段筛选与重复行折叠",
+                        "Realtime logs page adds buffer/error/warning metric cards, level segment filters, and duplicate-row collapsing",
+                    ),
+                    Bilingual::new(
+                        "每日统计页支持 7/14/30 天区间切换，趋势图仅标注峰值",
+                        "Daily stats page supports 7/14/30-day range switching; the trend chart annotates peaks only",
+                    ),
+                ]),
+                fix_group(vec![
+                    Bilingual::new(
+                        "每日统计「今天」改按 CST(UTC+8) 计算，与后端聚合口径对齐",
+                        "Daily stats now computes \"today\" in CST (UTC+8) to match the backend aggregation window",
+                    ),
+                    Bilingual::new(
+                        "实时日志时间戳按浏览器时区渲染，不再把 UTC 时钟当本地时间显示",
+                        "Realtime log timestamps render in the browser time zone instead of showing the UTC clock as local time",
+                    ),
+                ]),
+            ],
+        },
         ReleaseNote {
             version: "2.9.5".to_string(),
             date: "2026-08-13".to_string(),
-            is_latest: true,
+            is_latest: false,
             groups: vec![feat_group(vec![Bilingual::new(
                 "Admin 后台侧边栏支持折叠/展开",
                 "Admin console sidebar now supports collapse/expand",
@@ -155,7 +238,22 @@ pub fn build_release_notes() -> Vec<ReleaseNote> {
                 "Fixed a build failure caused by the Dockerfile missing a COPY assets step, which left the ip2region xdb file absent in the container",
             )])],
         },
-    ]
+    ];
+
+    // is_latest 后处理：与 CURRENT_VERSION 匹配的条目标为最新，
+    // 列表里找不到时全部置 false（避免历史版本继续被高亮）
+    let matched = notes.iter().filter(|n| n.version == CURRENT_VERSION).count();
+    if matched == 1 {
+        for n in notes.iter_mut() {
+            n.is_latest = n.version == CURRENT_VERSION;
+        }
+    } else {
+        for n in notes.iter_mut() {
+            n.is_latest = false;
+        }
+    }
+
+    notes
 }
 
 #[cfg(test)]
@@ -165,8 +263,19 @@ mod tests {
     #[test]
     fn test_exactly_one_latest_version() {
         let notes = build_release_notes();
-        let latest_count = notes.iter().filter(|n| n.is_latest).count();
-        assert_eq!(latest_count, 1, "必须有且仅有一条 is_latest=true");
+        // 至多一条 is_latest=true（changelog 未列当前版本时全部 false）
+        assert!(
+            notes.iter().filter(|n| n.is_latest).count() <= 1,
+            "is_latest=true 至多一条"
+        );
+        // 当前版本在 changelog 里时必须被标 latest
+        if notes.iter().any(|n| n.version == CURRENT_VERSION) {
+            assert!(
+                notes.iter().any(|n| n.version == CURRENT_VERSION && n.is_latest),
+                "当前版本 {} 在 changelog 中时必须 is_latest=true",
+                CURRENT_VERSION
+            );
+        }
     }
 
     #[test]
