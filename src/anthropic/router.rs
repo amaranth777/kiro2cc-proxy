@@ -65,8 +65,6 @@ fn build_router(state: AppState) -> Router {
         .route("/models", get(get_models))
         .route("/models/{model_id}", get(get_model))
         .route("/messages", post(post_messages))
-        .route("/responses", post(post_responses))
-        .route("/chat/completions", post(post_chat_completions))
         .route("/completions", post(post_completions))
         .route("/embeddings", post(unsupported_embeddings))
         .route("/images/generations", post(unsupported_images))
