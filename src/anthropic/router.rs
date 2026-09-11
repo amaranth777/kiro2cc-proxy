@@ -10,8 +10,6 @@ use axum::{
 use tower_http::trace::TraceLayer;
 
 use crate::kiro::provider::KiroProvider;
-use crate::openai::{post_chat_completions, post_responses};
-
 use super::{
     handlers::{count_tokens, get_model, get_models, ping, post_messages, post_messages_cc},
     middleware::{AppState, auth_middleware, cors_layer},

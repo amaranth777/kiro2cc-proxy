@@ -735,11 +735,8 @@ Authorization: Bearer your-api-key
 | `*opus*`（其他） | `claude-opus-4.6` |
 | `*fable*` | `claude-fable-5` |
 | `*haiku*` | `claude-haiku-4.5` |
-| `*deepseek*` | `deepseek-3.2` |
-| `*glm*` | `glm-5` |
-| `*minimax*`（含 2.5/2-5） | `minimax-m2.5` |
-| `*minimax*`（其他） | `minimax-m2.1` |
-| `*qwen*` | `qwen3-coder-next` |
+| `*deepseek*`、`*glm*`、`*minimax*`、`*qwen*` | `gpt-5.6-luna` |
+| 其他未识别模型 | `gpt-5.6-luna` |
 | `*gpt*`（含 terra） | `gpt-5.6-terra` |
 | `*gpt*`（含 luna） | `gpt-5.6-luna` |
 | `*gpt*`（含 sol，或含 5.6/5-6 但无具体变体名，默认落到旗舰档） | `gpt-5.6-sol` |

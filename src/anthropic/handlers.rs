@@ -152,9 +152,10 @@ fn map_provider_error_with_context(
     // （表现为工具调用不执行 / 卡住），而 429 会触发客户端自动等待重试。
     if err_str.contains("429") || err_str.contains("Too Many Requests") {
         tracing::warn!(error = %err, "上游限流（所有账号 429 耗尽）：透传 429 给客户端以触发其退避重试");
+        let retry_after = retry_after_hint(&err_str).to_string();
         return (
             StatusCode::TOO_MANY_REQUESTS,
-            [(header::RETRY_AFTER, "5")],
+            [(header::RETRY_AFTER, retry_after.as_str())],
             Json(ErrorResponse::new(
                 "rate_limit_error",
                 "Upstream rate limit reached on all accounts. Please retry shortly.",
@@ -174,6 +175,20 @@ fn map_provider_error_with_context(
         )),
     )
         .into_response()
+}
+
+fn retry_after_hint(error_message: &str) -> u64 {
+    const MARKER: &str = "retry after ";
+    if let Some(rest) = error_message
+        .rfind(MARKER)
+        .map(|start| &error_message[start + MARKER.len()..])
+    {
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(seconds) = digits.parse::<u64>() {
+            return seconds;
+        }
+    }
+    30
 }
 
 /// 从原始请求体反序列化 MessagesRequest，失败时记录详细的 serde 错误用于诊断。
@@ -540,7 +555,11 @@ async fn handle_stream_request(
     stream_deadline: Option<Duration>,
 ) -> Response {
     // 调用 Kiro API（支持多账号故障转移）
-    let (response, credential_id) = match provider.call_api_stream(request_body, &bound_ids).await {
+    let rpm_exempt = model.to_lowercase().contains("deepseek");
+    let (response, credential_id) = match provider
+        .call_api_stream(request_body, &bound_ids, rpm_exempt)
+        .await
+    {
         Ok(resp) => resp,
         Err(e) => return map_provider_error_with_context(e, model, input_tokens),
     };
@@ -839,7 +858,11 @@ async fn handle_non_stream_request(
     fp_profile: Option<Vec<crate::cache::fingerprint::ContentSegment>>,
 ) -> Response {
     // 调用 Kiro API（支持多账号故障转移）
-    let (response, credential_id) = match provider.call_api(request_body, &bound_ids).await {
+    let rpm_exempt = model.to_lowercase().contains("deepseek");
+    let (response, credential_id) = match provider
+        .call_api(request_body, &bound_ids, rpm_exempt)
+        .await
+    {
         Ok(resp) => resp,
         Err(e) => return map_provider_error_with_context(e, model, input_tokens),
     };
@@ -1032,6 +1055,15 @@ async fn handle_non_stream_request(
         fingerprint_usage,
         sim_usage,
     );
+    let usage_source = if metering_pair.is_some() {
+        "metering"
+    } else if prefix_estimated.is_some() {
+        "prefix_estimated"
+    } else if fingerprint_usage.is_some() {
+        "fingerprint"
+    } else {
+        "simulation"
+    };
 
     // 流结束后写入指纹表（仅当 credential_id 确定）
     if let (Some(tracker), Some(profile)) = (fp_tracker.as_ref(), fp_profile.clone()) {
@@ -1048,10 +1080,11 @@ async fn handle_non_stream_request(
     // 记录用量（内部使用真实值）
     if let (Some(tracker), Some(key_id)) = (&usage_tracker, api_key_id) {
         tracing::info!(
-            "[usage] 入库: model={} input={} output={} metering_credits={:?} cache_read={} cache_creation={} api_key={} credential=Some({})",
+            "[usage] 入库: model={} input={} output={} usage_source={} metering_credits={:?} cache_read={} cache_creation={} api_key={} credential=Some({})",
             model,
             final_input_tokens,
             output_tokens,
+            usage_source,
             metering_usage,
             report_cache_read,
             report_cache_creation,
@@ -1552,6 +1585,13 @@ mod tests {
         let err = anyhow::anyhow!("上游限流：429 Too Many Requests");
         let resp = map_provider_error_with_context(err, "claude-sonnet-4-6", 100);
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn retry_after_hint_parses_provider_marker_or_defaults_to_bucket_window() {
+        assert_eq!(retry_after_hint("429 Too Many Requests; retry after 30s"), 30);
+        assert_eq!(retry_after_hint("429 Too Many Requests"), 30);
+        assert_eq!(retry_after_hint("429 Too Many Requests; retry after soon"), 30);
     }
 
     #[tokio::test]

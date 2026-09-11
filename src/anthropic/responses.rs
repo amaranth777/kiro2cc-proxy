@@ -1508,7 +1508,7 @@ async fn execute_non_stream(
     exec_command_requested: bool,
 ) -> Result<(ResponseAccumulator, u64), Response> {
     let (response, credential_id) = provider
-        .call_api(request_body, bound_ids)
+        .call_api(request_body, bound_ids, false)
         .await
         .map_err(|error| error_response(StatusCode::BAD_GATEWAY, error.to_string()))?;
     let bytes = response
@@ -2202,7 +2202,8 @@ pub async fn post_responses(
         .await;
     }
 
-    let (response, credential_id) = match provider.call_api(&request_body, &bound_ids).await {
+    let (response, credential_id) =
+        match provider.call_api(&request_body, &bound_ids, false).await {
         Ok(response) => response,
         Err(error) => return error_response(StatusCode::BAD_GATEWAY, error.to_string()),
     };
@@ -2416,7 +2417,9 @@ async fn stream_response(
     usage_tracker: Option<Arc<UsageTracker>>,
     api_key_id: Option<u32>,
 ) -> Response {
-    let (response, credential_id) = match provider.call_api_stream(&request_body, &bound_ids).await
+    let (response, credential_id) = match provider
+        .call_api_stream(&request_body, &bound_ids, false)
+        .await
     {
         Ok(response) => response,
         Err(error) => return error_response(StatusCode::BAD_GATEWAY, error.to_string()),
@@ -2626,7 +2629,9 @@ async fn chat_stream_response(
     usage_tracker: Option<Arc<UsageTracker>>,
     api_key_id: Option<u32>,
 ) -> Response {
-    let (response, credential_id) = match provider.call_api_stream(&request_body, &bound_ids).await
+    let (response, credential_id) = match provider
+        .call_api_stream(&request_body, &bound_ids, false)
+        .await
     {
         Ok(response) => response,
         Err(error) => return error_response(StatusCode::BAD_GATEWAY, error.to_string()),
@@ -2799,7 +2804,9 @@ async fn completion_stream_response(
     usage_tracker: Option<Arc<UsageTracker>>,
     api_key_id: Option<u32>,
 ) -> Response {
-    let (response, credential_id) = match provider.call_api_stream(&request_body, &bound_ids).await
+    let (response, credential_id) = match provider
+        .call_api_stream(&request_body, &bound_ids, false)
+        .await
     {
         Ok(response) => response,
         Err(error) => return error_response(StatusCode::BAD_GATEWAY, error.to_string()),

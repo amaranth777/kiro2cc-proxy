@@ -714,11 +714,8 @@ Any model name containing the following keywords is automatically mapped to the 
 | `*opus*` (others) | `claude-opus-4.6` |
 | `*fable*` | `claude-fable-5` |
 | `*haiku*` | `claude-haiku-4.5` |
-| `*deepseek*` | `deepseek-3.2` |
-| `*glm*` | `glm-5` |
-| `*minimax*` (including 2.5/2-5) | `minimax-m2.5` |
-| `*minimax*` (others) | `minimax-m2.1` |
-| `*qwen*` | `qwen3-coder-next` |
+| `*deepseek*`, `*glm*`, `*minimax*`, `*qwen*` | `gpt-5.6-luna` |
+| Other unrecognized models | `gpt-5.6-luna` |
 | `*gpt*` (including terra) | `gpt-5.6-terra` |
 | `*gpt*` (including luna) | `gpt-5.6-luna` |
 | `*gpt*` (including sol, or 5.6/5-6 without a variant name, defaults to the flagship tier) | `gpt-5.6-sol` |

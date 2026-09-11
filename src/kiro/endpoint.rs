@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-/// 单次 429 后桶封禁时长（与 `provider::throttle_delay` 最大档对齐）
+/// 单次 429 后端点桶封禁时长
+///
+/// `USER_REQUEST_RATE_EXCEEDED` 会在 `provider::throttle_delay` 中等待更长窗口。
 pub const BUCKET_THROTTLE_DURATION: Duration = Duration::from_secs(30);
 
 /// Kiro 上游端点名称
@@ -152,6 +154,18 @@ impl EndpointBucketRegistry {
             return false;
         }
         true
+    }
+
+    /// 查询桶剩余封禁时间；已到期时惰性清理并返回 `None`
+    pub fn throttle_remaining(&self, credential_id: u64, name: EndpointName) -> Option<Duration> {
+        let mut guard = self.inner.lock();
+        let until = guard.get(&(credential_id, name)).copied()?;
+        let now = Instant::now();
+        if now >= until {
+            guard.remove(&(credential_id, name));
+            return None;
+        }
+        Some(until.duration_since(now))
     }
 
     /// 测试辅助：当前所有被封禁桶的数量（不计过期）

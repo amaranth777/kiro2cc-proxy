@@ -518,6 +518,11 @@ fn normalize_system_for_cache_id(system: &str) -> String {
 /// - 其他 opus → claude-opus-4.6
 /// - 所有 haiku → claude-haiku-4.5
 pub fn map_model(model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("-thinking") {
+        return None;
+    }
+
     let model_lower = model.to_lowercase();
 
     if model_lower.contains("sonnet") {
@@ -563,18 +568,13 @@ pub fn map_model(model: &str) -> Option<String> {
         Some("claude-haiku-4.5".to_string())
     } else if model_lower == "auto" {
         Some("auto".to_string())
-    } else if model_lower.contains("deepseek") {
-        Some("deepseek-3.2".to_string())
-    } else if model_lower.contains("glm") {
-        Some("glm-5".to_string())
-    } else if model_lower.contains("minimax") {
-        if model_lower.contains("2.5") || model_lower.contains("2-5") {
-            Some("minimax-m2.5".to_string())
-        } else {
-            Some("minimax-m2.1".to_string())
-        }
-    } else if model_lower.contains("qwen") {
-        Some("qwen3-coder-next".to_string())
+    } else if model_lower.contains("deepseek")
+        || model_lower.contains("glm")
+        || model_lower.contains("minimax")
+        || model_lower.contains("qwen")
+    {
+        // 当前 Kiro 池没有这些非 Claude 供应商模型；统一走成本可控的 Luna。
+        Some("gpt-5.6-luna".to_string())
     } else if model_lower.contains("gpt") {
         if model_lower.contains("terra") {
             Some("gpt-5.6-terra".to_string())
@@ -587,28 +587,10 @@ pub fn map_model(model: &str) -> Option<String> {
             // 未指定具体变体（sol/terra/luna）时默认落到旗舰档 sol
             Some("gpt-5.6-sol".to_string())
         } else {
-            // gpt-* 未命中已知变体：走开放透传兜底
-            passthrough_model(model)
+            Some("gpt-5.6-luna".to_string())
         }
     } else {
-        // 未命中任何内置关键词规则：开放透传，可用性交由上游判断
-        passthrough_model(model)
-    }
-}
-
-/// 开放透传兜底：对未命中内置规则的模型 ID 剥离 `-thinking` 后原样透传；
-/// 空字符串仍返回 `None`（上层转为 `UnsupportedModel`）。
-///
-/// thinking 由 `req.thinking` / additionalModelRequestFields 单独控制，
-/// 透传给上游的后端模型 ID 不应携带 `-thinking` 标记。
-fn passthrough_model(model: &str) -> Option<String> {
-    let stripped = model.replace("-thinking", "");
-    let trimmed = stripped.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        tracing::info!(target: "model_passthrough", original = %model, passthrough = %trimmed, "未知模型开放透传");
-        Some(trimmed.to_string())
+        Some("gpt-5.6-luna".to_string())
     }
 }
 
@@ -675,6 +657,73 @@ fn extract_session_id(user_id: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// 从 JSON metadata.user_id 中提取请求来源。
+///
+/// Mihaha 的主循环、compact、标题生成和子代理共用同一个 Claude session_id，
+/// 但它们不能共用 Kiro continuation。
+fn extract_query_source(user_id: &str) -> Option<String> {
+    if !user_id.trim_start().starts_with('{') {
+        return None;
+    }
+    let value = serde_json::from_str::<serde_json::Value>(user_id).ok()?;
+    let source = value.get("query_source")?.as_str()?.trim();
+    if source.is_empty() {
+        None
+    } else {
+        Some(source.to_string())
+    }
+}
+
+const COMPACT_REQUEST_MARKER: &str = "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.";
+
+/// 兼容未携带 query_source 的旧 Mihaha sidecar。
+fn is_compact_request(req: &MessagesRequest) -> bool {
+    let Some(message) = req.messages.last() else {
+        return false;
+    };
+    match &message.content {
+        serde_json::Value::String(text) => text.contains(COMPACT_REQUEST_MARKER),
+        serde_json::Value::Array(blocks) => blocks.iter().any(|block| {
+            block
+                .get("text")
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| text.contains(COMPACT_REQUEST_MARKER))
+        }),
+        _ => false,
+    }
+}
+
+/// 返回请求族标识。主循环共享主 continuation，辅助请求各自隔离。
+fn request_family(req: &MessagesRequest) -> Option<String> {
+    let query_source = req
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.user_id.as_deref())
+        .and_then(extract_query_source);
+
+    match query_source.as_deref() {
+        Some(source) if source.starts_with("repl_main_thread") => None,
+        Some(source) => Some(source.to_string()),
+        None if is_compact_request(req) => Some("compact".to_string()),
+        None => None,
+    }
+}
+
+/// 为同一 Claude session 下的辅助请求派生独立的 Kiro conversation UUID。
+fn derive_scoped_conversation_id(base_id: &str, family: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"conversation-family:");
+    hasher.update(base_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(family.as_bytes());
+    let result = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&result[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes).to_string()
 }
 
 /// 从 conversationId 派生稳定的 agentContinuationId
@@ -920,7 +969,7 @@ pub fn convert_request_with_session(
         .as_ref()
         .and_then(|m| m.user_id.as_ref())
         .and_then(|user_id| extract_session_id(user_id));
-    let (conversation_id, id_source) = metadata_session_id
+    let (base_conversation_id, id_source) = metadata_session_id
         .map(|id| (id, "metadata"))
         .or_else(|| {
             session_id
@@ -931,14 +980,22 @@ pub fn convert_request_with_session(
         })
         .or_else(|| derive_fallback_conversation_id(req).map(|id| (id, "fallback")))
         .unwrap_or_else(|| (Uuid::new_v4().to_string(), "random"));
+    let family = request_family(req);
+    let conversation_id = family
+        .as_deref()
+        .map(|request_family| {
+            derive_scoped_conversation_id(&base_conversation_id, request_family)
+        })
+        .unwrap_or_else(|| base_conversation_id.clone());
     let prefix_fingerprint = derive_prefix_fingerprint(req);
     // agentContinuationId 基于独立 conversationId 派生，保持同一会话内稳定。
     let agent_continuation_id = derive_agent_continuation_id(&conversation_id);
     tracing::info!(
-        "[session] conversationId={} agentContinuationId={} source={} prefixFingerprint={:?} (同一会话的连续请求这两个值应保持不变)",
+        "[session] conversationId={} agentContinuationId={} source={} family={:?} prefixFingerprint={:?} (同一请求族的连续请求这两个值应保持不变)",
         conversation_id,
         agent_continuation_id,
         id_source,
+        family,
         prefix_fingerprint
     );
 
@@ -2112,22 +2169,27 @@ mod tests {
     }
 
     #[test]
-    fn test_map_model_passthrough_unknown() {
-        // 开放透传：未命中内置规则的非空模型 ID 原样透传
-        assert_eq!(map_model("gpt-4").unwrap(), "gpt-4");
+    fn test_map_model_unknown_falls_back_to_luna() {
+        // 没有 Kiro 对应模型的请求统一走 Luna，避免开放透传到无效模型。
+        assert_eq!(map_model("gpt-4").unwrap(), "gpt-5.6-luna");
         assert_eq!(
             map_model("some-brand-new-model").unwrap(),
-            "some-brand-new-model"
+            "gpt-5.6-luna"
         );
     }
 
     #[test]
-    fn test_map_model_passthrough_strips_thinking() {
-        // 透传时剥离 -thinking 标记（thinking 由 req.thinking 单独控制）
-        assert_eq!(map_model("gpt-4-thinking").unwrap(), "gpt-4");
+    fn test_map_model_unsupported_providers_fall_back_to_luna() {
+        assert_eq!(
+            map_model("tongyi/deepseek-v4-pro-0813").unwrap(),
+            "gpt-5.6-luna"
+        );
+        assert_eq!(map_model("glm-4.6").unwrap(), "gpt-5.6-luna");
+        assert_eq!(map_model("minimax-m2.5").unwrap(), "gpt-5.6-luna");
+        assert_eq!(map_model("qwen3-coder").unwrap(), "gpt-5.6-luna");
         assert_eq!(
             map_model("brand-new-thinking-model").unwrap(),
-            "brand-new-model"
+            "gpt-5.6-luna"
         );
     }
 
@@ -2144,7 +2206,6 @@ mod tests {
         // 内置规则优先级不变
         assert_eq!(map_model("claude-sonnet-4-5").unwrap(), "claude-sonnet-4.5");
         assert_eq!(map_model("gpt-5.6-sol").unwrap(), "gpt-5.6-sol");
-        assert_eq!(map_model("glm-4.6").unwrap(), "glm-5");
     }
 
     #[test]
@@ -2959,6 +3020,114 @@ mod tests {
                 .filter(|c| *c == '-')
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn test_request_family_scopes_auxiliary_continuation() {
+        use super::super::types::{Message as AnthropicMessage, Metadata};
+
+        let session_uuid = "a0662283-7fd3-4399-a7eb-52b9a717ae88";
+        let make_req = |query_source: &str| MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 1024,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Hello"),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: Some(Metadata {
+                user_id: Some(
+                    serde_json::json!({
+                        "session_id": session_uuid,
+                        "query_source": query_source,
+                    })
+                    .to_string(),
+                ),
+            }),
+        };
+
+        let main = convert_request(&make_req("repl_main_thread")).unwrap();
+        let main_with_style =
+            convert_request(&make_req("repl_main_thread:outputStyle:custom")).unwrap();
+        let compact = convert_request(&make_req("compact")).unwrap();
+        let compact_again = convert_request(&make_req("compact")).unwrap();
+        let title = convert_request(&make_req("title_generation")).unwrap();
+
+        assert_eq!(
+            main.conversation_state.conversation_id,
+            main_with_style.conversation_state.conversation_id,
+            "主循环的 output style 变体必须共享 conversationId"
+        );
+        assert_eq!(
+            main.conversation_state.agent_continuation_id,
+            main_with_style.conversation_state.agent_continuation_id,
+            "主循环的 output style 变体必须共享 agentContinuationId"
+        );
+        assert_ne!(
+            main.conversation_state.conversation_id,
+            compact.conversation_state.conversation_id,
+            "compact 不得复用主循环的 conversationId"
+        );
+        assert_ne!(
+            main.conversation_state.agent_continuation_id,
+            compact.conversation_state.agent_continuation_id,
+            "compact 不得复用主循环的 agentContinuationId"
+        );
+        assert_eq!(
+            compact.conversation_state.agent_continuation_id,
+            compact_again.conversation_state.agent_continuation_id,
+            "同一请求族跨轮次必须保持 continuation 稳定"
+        );
+        assert_ne!(
+            compact.conversation_state.agent_continuation_id,
+            title.conversation_state.agent_continuation_id,
+            "不同辅助请求族不得共享 continuation"
+        );
+    }
+
+    #[test]
+    fn test_old_compact_request_marker_scopes_without_query_source() {
+        use super::super::types::{Message as AnthropicMessage, Metadata};
+
+        let session_uuid = "a0662283-7fd3-4399-a7eb-52b9a717ae88";
+        let make_req = |content: &str| MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 1024,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!(content),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: Some(Metadata {
+                user_id: Some(
+                    serde_json::json!({"session_id": session_uuid}).to_string(),
+                ),
+            }),
+        };
+
+        let main = convert_request(&make_req("Hello")).unwrap();
+        let compact = convert_request(&make_req(COMPACT_REQUEST_MARKER)).unwrap();
+
+        assert_ne!(
+            main.conversation_state.conversation_id,
+            compact.conversation_state.conversation_id,
+            "旧版 Mihaha 的 compact 请求也必须与主循环隔离"
+        );
+        assert_ne!(
+            main.conversation_state.agent_continuation_id,
+            compact.conversation_state.agent_continuation_id,
+            "旧版 Mihaha 的 compact 请求也必须使用独立 continuation"
         );
     }
 
