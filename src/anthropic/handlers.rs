@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Harllan He. Licensed under MIT.
 //! Anthropic API Handler 函数
 
-use std::collections::HashMap;
 use std::convert::Infallible;
 
 use crate::kiro::model::events::Event;
@@ -417,9 +416,7 @@ pub async fn post_messages(
                 )
                     .into_response();
             }
-    };
-
-    let tool_name_aliases = conversion_result.tool_name_aliases.clone();
+        };
 
     // 构建 Kiro 请求
     let kiro_request = KiroRequest {
@@ -517,7 +514,6 @@ pub async fn post_messages(
             bound_ids,
             client_ip,
             None, // /v1 无全局 deadline（保持现有行为）
-            tool_name_aliases.clone(),
         )
         .await
     } else {
@@ -536,7 +532,6 @@ pub async fn post_messages(
             json_schema_requested,
             fp_tracker,
             fp_profile,
-            tool_name_aliases,
         )
         .await
     }
@@ -558,7 +553,6 @@ async fn handle_stream_request(
     client_ip: Option<String>,
     // 上游流的全局超时；None 表示不限时（/v1 的现有行为）
     stream_deadline: Option<Duration>,
-    tool_name_aliases: HashMap<String, String>,
 ) -> Response {
     // 调用 Kiro API（支持多账号故障转移）
     let rpm_exempt = model.to_lowercase().contains("deepseek");
@@ -574,8 +568,7 @@ async fn handle_stream_request(
     let mut ctx = StreamContext::new_with_thinking(model, input_tokens, thinking_enabled)
         .with_usage_tracking(usage_tracker, api_key_id, Some(credential_id), client_ip)
         .with_prompt_cache_usage(prompt_cache_usage)
-        .with_prefix_estimated_tokens(prefix_estimated_tokens)
-        .with_tool_name_aliases(tool_name_aliases);
+        .with_prefix_estimated_tokens(prefix_estimated_tokens);
 
     // 生成初始事件
     let initial_events = ctx.generate_initial_events();
@@ -863,7 +856,6 @@ async fn handle_non_stream_request(
     json_schema_requested: bool,
     fp_tracker: Option<std::sync::Arc<crate::cache::fingerprint::FingerprintTracker>>,
     fp_profile: Option<Vec<crate::cache::fingerprint::ContentSegment>>,
-    tool_name_aliases: HashMap<String, String>,
 ) -> Response {
     // 调用 Kiro API（支持多账号故障转移）
     let rpm_exempt = model.to_lowercase().contains("deepseek");
@@ -943,14 +935,10 @@ async fn handle_non_stream_request(
                                     })
                                 };
 
-                                let client_name = tool_name_aliases
-                                    .get(&tool_use.name)
-                                    .cloned()
-                                    .unwrap_or_else(|| tool_use.name.clone());
                                 tool_uses.push(json!({
                                     "type": "tool_use",
                                     "id": tool_use.tool_use_id,
-                                    "name": client_name,
+                                    "name": tool_use.name,
                                     "input": input
                                 }));
                             }
@@ -1335,9 +1323,7 @@ pub async fn post_messages_cc(
                 )
                     .into_response();
             }
-    };
-
-    let tool_name_aliases = conversion_result.tool_name_aliases.clone();
+        };
 
     // 构建 Kiro 请求
     let kiro_request = KiroRequest {
@@ -1435,7 +1421,6 @@ pub async fn post_messages_cc(
             bound_ids,
             client_ip,
             Some(Duration::from_secs(300)),
-            tool_name_aliases,
         )
         .await
     } else {
@@ -1454,7 +1439,6 @@ pub async fn post_messages_cc(
             json_schema_requested,
             fp_tracker,
             fp_profile,
-            tool_name_aliases,
         )
         .await
     }

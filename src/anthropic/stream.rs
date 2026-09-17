@@ -710,8 +710,6 @@ pub struct StreamContext {
     /// `Some(0)` 表示"已估算且无前缀"（首条请求且无 system/tools），cache_read=0；
     /// `None` 表示"未注入估算"，降级到模拟值。
     prefix_estimated_tokens: Option<i32>,
-    /// Kiro 工具别名 -> 客户端原始工具名
-    tool_name_aliases: HashMap<String, String>,
 }
 
 impl StreamContext {
@@ -750,14 +748,7 @@ impl StreamContext {
             metering_cache_creation_tokens: None,
             context_usage_percentage: None,
             prefix_estimated_tokens: None,
-            tool_name_aliases: HashMap::new(),
         }
-    }
-
-    /// 设置工具名还原映射
-    pub fn with_tool_name_aliases(mut self, aliases: HashMap<String, String>) -> Self {
-        self.tool_name_aliases = aliases;
-        self
     }
 
     /// 设置 prompt cache usage
@@ -1218,12 +1209,6 @@ impl StreamContext {
     ) -> Vec<SseEvent> {
         let mut events = Vec::new();
 
-        // Kiro 只接受受限工具名；发给客户端时必须还原成 Claude 侧的原始名称。
-        let client_name = self
-            .tool_name_aliases
-            .get(&tool_use.name)
-            .cloned()
-            .unwrap_or_else(|| tool_use.name.clone());
         self.state_manager.set_has_tool_use(true);
 
         // tool_use 必须发生在 thinking 结束之后。
@@ -1299,7 +1284,7 @@ impl StreamContext {
                 "content_block": {
                     "type": "tool_use",
                     "id": tool_use.tool_use_id,
-                    "name": client_name,
+                    "name": tool_use.name,
                     "input": {}
                 }
             }),

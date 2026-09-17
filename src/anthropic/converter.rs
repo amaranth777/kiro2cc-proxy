@@ -601,8 +601,6 @@ pub struct ConversionResult {
     pub conversation_state: ConversationState,
     /// 模型专属请求参数（thinking、output_config、max_tokens）
     pub additional_model_request_fields: Option<serde_json::Value>,
-    /// Kiro 工具别名 -> 原始工具名；仅在原始名不满足 Kiro 约束时存在
-    pub tool_name_aliases: HashMap<String, String>,
 }
 
 /// 转换错误
@@ -1010,6 +1008,9 @@ pub fn convert_request_with_session(
     let text_content = append_recent_knowledge_hints(text_content);
     let text_content = append_output_format_instruction(text_content, &req.output_config);
 
+    // 6. 转换工具定义
+    let mut tools = convert_tools(&req.tools);
+
     // 7. 构建历史消息（需要先构建，以便收集历史中使用的工具）
     let mut history = build_history(req, messages, &model_id, &conversation_id)?;
 
@@ -1026,31 +1027,14 @@ pub fn convert_request_with_session(
     // Kiro API 要求：历史消息中引用的工具必须在 tools 列表中有定义
     // 注意：Kiro 匹配工具名称时忽略大小写，所以这里也需要忽略大小写比较
     let history_tool_names = collect_history_tool_names(&history);
-
-    // 7.5 建立工具名映射，同时覆盖当前工具定义和历史 tool_use。
-    let tool_names = req
-        .tools
-        .iter()
-        .flatten()
-        .map(|tool| tool.name.as_str())
-        .chain(history_tool_names.iter().map(String::as_str));
-    let (name_by_original, tool_name_aliases) = build_tool_name_maps(tool_names);
-
-    // 6. 转换工具定义
-    let mut tools = convert_tools(&req.tools, &name_by_original);
-    apply_tool_name_aliases_to_history(&mut history, &name_by_original);
-
     let existing_tool_names: std::collections::HashSet<_> = tools
         .iter()
         .map(|t| t.tool_specification.name.to_lowercase())
         .collect();
+
     for tool_name in history_tool_names {
-        let kiro_name = name_by_original
-            .get(&tool_name)
-            .cloned()
-            .unwrap_or_else(|| tool_name.clone());
-        if !existing_tool_names.contains(&kiro_name.to_lowercase()) {
-            tools.push(create_placeholder_tool(&kiro_name));
+        if !existing_tool_names.contains(&tool_name.to_lowercase()) {
+            tools.push(create_placeholder_tool(&tool_name));
         }
     }
 
@@ -1114,7 +1098,6 @@ pub fn convert_request_with_session(
     Ok(ConversionResult {
         conversation_state,
         additional_model_request_fields,
-        tool_name_aliases,
     })
 }
 
@@ -1610,10 +1593,7 @@ fn remove_orphaned_tool_uses(
 }
 
 /// 转换工具定义
-fn convert_tools(
-    tools: &Option<Vec<super::types::Tool>>,
-    name_by_original: &HashMap<String, String>,
-) -> Vec<Tool> {
+fn convert_tools(tools: &Option<Vec<super::types::Tool>>) -> Vec<Tool> {
     let Some(tools) = tools else {
         return Vec::new();
     };
@@ -1656,14 +1636,9 @@ fn convert_tools(
             None => description,
         };
 
-        let kiro_name = name_by_original
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| name.to_string());
-
         converted.push(Tool {
             tool_specification: ToolSpecification {
-                name: kiro_name,
+                name: name.to_string(),
                 description,
                 input_schema: InputSchema::from_json(normalize_json_schema(serde_json::json!(
                     t.input_schema
@@ -1673,84 +1648,6 @@ fn convert_tools(
     }
 
     converted
-}
-
-/// Kiro/AWS ToolSpecification 的 name 约束：最长 64，且仅允许字母数字、下划线和连字符。
-const KIRO_TOOL_NAME_MAX_LEN: usize = 64;
-
-fn is_kiro_safe_tool_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= KIRO_TOOL_NAME_MAX_LEN
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-}
-
-/// 为不满足 Kiro name 约束的工具生成稳定、可重复使用的短别名。
-///
-/// 使用哈希而不是截断，避免不同 MCP 前缀截断后互相覆盖。
-fn alias_tool_name(original: &str) -> String {
-    let digest = Sha256::digest(original.as_bytes());
-    let hash: String = digest
-        .iter()
-        .take(14)
-        .map(|byte| format!("{:02x}", byte))
-        .collect();
-    format!("kiro_tool_{}", hash)
-}
-
-/// 构建请求侧（原始名 -> Kiro 别名）与响应侧（Kiro 别名 -> 原始名）映射。
-fn build_tool_name_maps<'a, I>(names: I) -> (HashMap<String, String>, HashMap<String, String>)
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut name_by_original = HashMap::new();
-    let mut original_by_alias = HashMap::new();
-
-    for raw_name in names {
-        let original = raw_name.trim();
-        if original.is_empty() || name_by_original.contains_key(original) {
-            continue;
-        }
-
-        let base_alias = if is_kiro_safe_tool_name(original) {
-            original.to_string()
-        } else {
-            alias_tool_name(original)
-        };
-        let mut alias = base_alias.clone();
-        let mut suffix = 1;
-        while original_by_alias
-            .get(&alias)
-            .is_some_and(|mapped_original| mapped_original != original)
-        {
-            alias = format!("{}_{}", base_alias, suffix);
-            suffix += 1;
-        }
-
-        name_by_original.insert(original.to_string(), alias.clone());
-        original_by_alias.insert(alias, original.to_string());
-    }
-
-    (name_by_original, original_by_alias)
-}
-
-/// 将历史 assistant 消息中的原始工具名同步替换为发给 Kiro 的别名。
-fn apply_tool_name_aliases_to_history(
-    history: &mut [crate::kiro::model::requests::conversation::Message],
-    name_by_original: &HashMap<String, String>,
-) {
-    for message in history {
-        if let crate::kiro::model::requests::conversation::Message::Assistant(assistant) = message
-            && let Some(ref mut tool_uses) = assistant.assistant_response_message.tool_uses
-        {
-            for tool_use in tool_uses {
-                if let Some(alias) = name_by_original.get(tool_use.name.as_str()) {
-                    tool_use.name = alias.clone();
-                }
-            }
-        }
-    }
 }
 
 /// 根据模型返回 Kiro 允许的 max_tokens 上限
@@ -2692,53 +2589,6 @@ mod tests {
             metadata: None,
         };
         assert_eq!(determine_agent_task_type(&req), "spectask");
-    }
-
-    #[test]
-    fn test_long_tool_names_are_aliased_for_kiro_and_restorable() {
-        use super::super::types::{Message as AnthropicMessage, Tool};
-
-        let original_name =
-            "mcp__plugin_hindsight-memory_hindsight__agent_knowledge_get_current_bank";
-        let req = MessagesRequest {
-            model: "claude-sonnet-5".to_string(),
-            max_tokens: 1024,
-            messages: vec![AnthropicMessage {
-                role: "user".to_string(),
-                content: serde_json::json!("hi"),
-            }],
-            stream: false,
-            system: None,
-            tools: Some(vec![Tool {
-                tool_type: None,
-                name: original_name.to_string(),
-                description: "Read the current knowledge bank".to_string(),
-                input_schema: Default::default(),
-                max_uses: None,
-                defer_loading: None,
-            }]),
-            tool_choice: None,
-            thinking: None,
-            output_config: None,
-            metadata: None,
-        };
-
-        let result = convert_request(&req).unwrap();
-        let tools = &result
-            .conversation_state
-            .current_message
-            .user_input_message
-            .user_input_message_context
-            .tools;
-        assert_eq!(tools.len(), 1);
-        let alias = &tools[0].tool_specification.name;
-        assert_ne!(alias, original_name);
-        assert!(alias.starts_with("kiro_tool_"));
-        assert!(alias.len() <= 64);
-        assert_eq!(
-            result.tool_name_aliases.get(alias).map(String::as_str),
-            Some(original_name)
-        );
     }
 
     #[test]
