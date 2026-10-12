@@ -224,6 +224,41 @@ pub(crate) fn deadline_error_event() -> SseEvent {
     )
 }
 
+/// 处理上游 EOF 的最终事件。
+///
+/// decoder 在 EOF 时仍持有字节，说明最后一帧不完整；即使此前已产生部分内容，
+/// 也必须按流中断处理，不能继续生成正常的 `message_stop`/tool_use 收尾。
+pub(crate) fn finalize_eof_events(
+    ctx: &mut StreamContext,
+    decoder: &EventStreamDecoder,
+    elapsed: Duration,
+) -> Vec<SseEvent> {
+    if decoder.buffer_len() > 0 {
+        tracing::warn!(
+            remaining_bytes = decoder.buffer_len(),
+            stream_elapsed_secs = elapsed.as_secs(),
+            "上游 EOF 时 decoder 仍有残帧，按流中断处理"
+        );
+        return vec![stream_interrupted_error_event_after(elapsed)];
+    }
+
+    if ctx.is_empty_response() {
+        let oversized = ctx.empty_response_is_oversized_context();
+        tracing::warn!(
+            oversized_context = oversized,
+            est_input_tokens = ctx.input_tokens,
+            "上游返回空响应（无任何内容事件），补发 error 事件"
+        );
+        if oversized {
+            ctx.generate_final_events()
+        } else {
+            vec![empty_response_error_event(false)]
+        }
+    } else {
+        ctx.generate_final_events()
+    }
+}
+
 /// 创建 SSE 事件流
 fn create_sse_stream(
     response: reqwest::Response,
@@ -513,23 +548,9 @@ fn create_sse_stream(
                                 ));
                                 }
 
-                            // 非桥接态（或桥接无待执行搜索）→ 现有收尾路径（零行为变化）
-                            let mut out_events = Vec::new();
-                            if ctx.is_empty_response() {
-                                let oversized = ctx.empty_response_is_oversized_context();
-                                tracing::warn!(
-                                    oversized_context = oversized,
-                                    est_input_tokens = ctx.input_tokens,
-                                    "上游返回空响应（无任何内容事件），补发 error 事件"
-                                );
-                                if oversized {
-                                    out_events = ctx.generate_final_events();
-                                } else {
-                                    out_events.push(empty_response_error_event(false));
-                                }
-                            } else {
-                                out_events = ctx.generate_final_events();
-                            }
+                            // 非桥接态（或桥接无待执行搜索）→ 现有收尾路径
+                            let out_events =
+                                finalize_eof_events(&mut ctx, &decoder, stream_started_at.elapsed());
                             let bytes: Vec<Result<Bytes, Infallible>> = out_events
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))

@@ -8,12 +8,16 @@ mod tests {
 
     use super::super::super::nonstream::build_non_stream_content;
     use super::super::super::stream::{
-        stream_interrupted_error_event, stream_interrupted_error_event_after, wait_deadline,
+        finalize_eof_events, stream_interrupted_error_event, stream_interrupted_error_event_after,
+        wait_deadline,
     };
 
-    use crate::anthropic::stream::{CLIENT_ASSUMED_CONTEXT_WINDOW, scale_for_client};
+    use crate::anthropic::stream::{
+        CLIENT_ASSUMED_CONTEXT_WINDOW, StreamContext, scale_for_client,
+    };
 
     use crate::anthropic::types::Thinking;
+    use crate::kiro::parser::decoder::EventStreamDecoder;
 
     use axum::http::StatusCode;
     use axum::response::Response;
@@ -54,6 +58,40 @@ mod tests {
                 "不得断言未证实的时长上限"
             );
         }
+    }
+
+    #[test]
+    fn test_eof_with_incomplete_frame_is_error_not_normal_completion() {
+        let mut decoder = EventStreamDecoder::new();
+        decoder.feed(&[1, 2, 3, 4]).unwrap();
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, false);
+
+        let events = finalize_eof_events(&mut ctx, &decoder, Duration::from_secs(7));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "error");
+        assert_eq!(events[0].data["error"]["type"], "overloaded_error");
+        assert!(events[0].data["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("after 7s"));
+        assert!(!events.iter().any(|event| event.event == "message_stop"));
+    }
+
+    #[test]
+    fn test_eof_with_empty_decoder_keeps_existing_empty_response_behavior() {
+        let decoder = EventStreamDecoder::new();
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, false);
+
+        let events = finalize_eof_events(&mut ctx, &decoder, Duration::ZERO);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "error");
+        assert_eq!(events[0].data["error"]["type"], "overloaded_error");
+        assert!(events[0].data["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("empty response"));
     }
 
     async fn response_body_text(resp: Response) -> String {
