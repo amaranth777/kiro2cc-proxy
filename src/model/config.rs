@@ -113,6 +113,10 @@ pub struct Config {
     #[serde(default = "default_tls_backend")]
     pub tls_backend: TlsBackend,
 
+    /// 额外信任的 CA 证书路径（PEM 格式），仅用于本进程出站 HTTPS 请求
+    #[serde(default)]
+    pub ca_cert_path: Option<String>,
+
     /// 外部 count_tokens API 地址（可选）
     #[serde(default)]
     pub count_tokens_api_url: Option<String>,
@@ -258,6 +262,7 @@ impl Default for Config {
             system_version: default_system_version(),
             node_version: default_node_version(),
             tls_backend: default_tls_backend(),
+            ca_cert_path: None,
             count_tokens_api_url: None,
             count_tokens_api_key: None,
             count_tokens_auth_type: default_count_tokens_auth_type(),
@@ -329,6 +334,7 @@ impl Config {
     /// - `PROXY_URL`: HTTP 代理地址
     /// - `PROXY_USERNAME`: 代理用户名
     /// - `PROXY_PASSWORD`: 代理密码
+    /// - `CA_CERT_PATH`: 额外信任的 CA 证书路径（PEM）
     /// - `LOAD_BALANCING_MODE`: 负载均衡模式
     /// - `MODEL_CACHE_TTL_SECS`: /v1/models 动态列表缓存 TTL（秒）
     /// - `CLIENT_TOKEN_PASSTHROUGH`: 客户端 token 直通开关
@@ -364,6 +370,9 @@ impl Config {
         }
         if let Ok(v) = env::var("PROXY_PASSWORD") {
             self.proxy_password = Some(v);
+        }
+        if let Ok(v) = env::var("CA_CERT_PATH") {
+            self.ca_cert_path = Some(v);
         }
         if let Ok(v) = env::var("LOAD_BALANCING_MODE") {
             self.load_balancing_mode = v;

@@ -60,6 +60,8 @@ pub struct KiroProvider {
     pub(crate) client_cache: Mutex<HashMap<(Option<ProxyConfig>, bool), Client>>,
     /// TLS 后端配置
     pub(crate) tls_backend: TlsBackend,
+    /// 额外信任的 CA 证书路径（PEM 格式）
+    pub(crate) ca_cert_path: Option<String>,
     /// 并发控制信号量，限制同时发往上游的请求数
     pub(crate) concurrency_limit: Arc<Semaphore>,
     /// 单账号并发信号量：限制每个账号的同时请求数
@@ -84,9 +86,15 @@ impl KiroProvider {
     /// 创建带代理配置的 KiroProvider 实例
     pub fn with_proxy(token_manager: Arc<MultiTokenManager>, proxy: Option<ProxyConfig>) -> Self {
         let tls_backend = token_manager.config().tls_backend;
+        let ca_cert_path = token_manager.config().ca_cert_path.clone();
         // 预热：为全局代理配置构建普通超时 Client（长超时 Client 按需懒创建）
-        let initial_client = build_client(proxy.as_ref(), UPSTREAM_TIMEOUT_SECS, tls_backend)
-            .expect("创建 HTTP 客户端失败");
+        let initial_client = build_client(
+            proxy.as_ref(),
+            UPSTREAM_TIMEOUT_SECS,
+            tls_backend,
+            ca_cert_path.as_deref(),
+        )
+        .expect("创建 HTTP 客户端失败");
         let mut cache = HashMap::new();
         cache.insert((proxy.clone(), false), initial_client);
 
@@ -95,6 +103,7 @@ impl KiroProvider {
             global_proxy: proxy,
             client_cache: Mutex::new(cache),
             tls_backend,
+            ca_cert_path,
             concurrency_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             credential_semaphores: Mutex::new(HashMap::new()),
             rpm_tracker: None,
@@ -150,7 +159,12 @@ impl KiroProvider {
             use_long_timeout,
             timeout_secs
         );
-        let client = build_client(effective.as_ref(), timeout_secs, self.tls_backend)?;
+        let client = build_client(
+            effective.as_ref(),
+            timeout_secs,
+            self.tls_backend,
+            self.ca_cert_path.as_deref(),
+        )?;
         cache.insert(key, client.clone());
         Ok(client)
     }

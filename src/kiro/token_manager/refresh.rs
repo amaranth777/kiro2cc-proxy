@@ -207,7 +207,12 @@ async fn refresh_social_token(
     let machine_id = machine_id::generate_from_credentials(credentials, config);
     let kiro_version = &config.kiro_version;
 
-    let client = build_client(proxy, KIRO_HTTP_SHORT_TIMEOUT_SECS, config.tls_backend)?;
+    let client = build_client(
+        proxy,
+        KIRO_HTTP_SHORT_TIMEOUT_SECS,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
     let body = RefreshRequest {
         refresh_token: refresh_token.to_string(),
     };
@@ -324,7 +329,12 @@ async fn refresh_idc_token(
     };
     let refresh_url = format!("https://oidc.{}.amazonaws.com/token", region);
 
-    let client = build_client(proxy, KIRO_HTTP_SHORT_TIMEOUT_SECS, config.tls_backend)?;
+    let client = build_client(
+        proxy,
+        KIRO_HTTP_SHORT_TIMEOUT_SECS,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
     let body = IdcRefreshRequest {
         client_id: client_id.to_string(),
         client_secret: client_secret.to_string(),
@@ -429,7 +439,12 @@ async fn refresh_external_idp_token(
         params.push(("scope", scopes_owned.as_str()));
     }
 
-    let client = build_client(proxy, KIRO_HTTP_SHORT_TIMEOUT_SECS, config.tls_backend)?;
+    let client = build_client(
+        proxy,
+        KIRO_HTTP_SHORT_TIMEOUT_SECS,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
     let response = client
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -601,7 +616,12 @@ async fn send_usage_limits_request(
 ) -> anyhow::Result<UsageLimitsResponse> {
     let agents = kiro_ide_user_agents(credentials, config);
 
-    let client = build_client(proxy, KIRO_HTTP_SHORT_TIMEOUT_SECS, config.tls_backend)?;
+    let client = build_client(
+        proxy,
+        KIRO_HTTP_SHORT_TIMEOUT_SECS,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
 
     // getUsageLimits 是 Q 控制面接口，鉴权需要 SSO portal 的 accessToken；
     // 而传入的 `token` 参数在 IdC 场景下是 credentials.access_token（存放的是 idToken，
@@ -701,7 +721,12 @@ pub(crate) async fn list_available_models(
         body["profileArn"] = serde_json::Value::String(profile_arn.clone());
     }
 
-    let client = build_client(proxy, LIST_MODELS_TIMEOUT_SECS, config.tls_backend)?;
+    let client = build_client(
+        proxy,
+        LIST_MODELS_TIMEOUT_SECS,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
 
     let response = client
         .post(&url)
@@ -771,7 +796,12 @@ pub(crate) async fn list_available_profiles(
     let region = kam_style_region(credentials.effective_api_region(config));
     let host = format!("codewhisperer.{}.amazonaws.com", region);
     let agents = kiro_ide_user_agents(credentials, config);
-    let client = build_client(proxy, LIST_MODELS_TIMEOUT_SECS, config.tls_backend)?;
+    let client = build_client(
+        proxy,
+        LIST_MODELS_TIMEOUT_SECS,
+        config.tls_backend,
+        config.ca_cert_path.as_deref(),
+    )?;
 
     // 形态 A：REST 路径（KAM）
     let rest = with_kiro_ide_headers(
