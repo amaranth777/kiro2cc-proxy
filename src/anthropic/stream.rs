@@ -652,6 +652,8 @@ pub fn cap_input_tokens_pub(context_input_tokens: i32, local_estimate: i32, mode
 pub struct StreamContext {
     /// SSE 状态管理器
     pub state_manager: SseStateManager,
+    /// 上游是否已经进入失败状态；失败流禁止正常收尾
+    upstream_failed: bool,
     /// 请求的模型名称
     pub model: String,
     /// 消息 ID
@@ -721,6 +723,7 @@ impl StreamContext {
     ) -> Self {
         Self {
             state_manager: SseStateManager::new(),
+            upstream_failed: false,
             model: model.into(),
             message_id: format!("msg_{}", Uuid::new_v4().to_string().replace('-', "")),
             input_tokens,
@@ -751,6 +754,20 @@ impl StreamContext {
         }
     }
 
+    /// 标记上游失败；返回 true 表示本次调用首次进入失败状态。
+    pub fn mark_upstream_failed(&mut self) -> bool {
+        if self.upstream_failed {
+            false
+        } else {
+            self.upstream_failed = true;
+            true
+        }
+    }
+
+    /// 上游是否已失败；失败状态禁止正常 SSE 收尾。
+    pub fn is_upstream_failed(&self) -> bool {
+        self.upstream_failed
+    }
     /// 设置 prompt cache usage
     pub fn with_prompt_cache_usage(mut self, usage: PromptCacheUsage) -> Self {
         self.prompt_cache_usage = usage;
@@ -877,6 +894,10 @@ impl StreamContext {
 
     /// 处理 Kiro 事件并转换为 Anthropic SSE 事件
     pub fn process_kiro_event(&mut self, event: &Event) -> Vec<SseEvent> {
+        if self.is_upstream_failed() {
+            return Vec::new();
+        }
+
         match event {
             Event::AssistantResponse(resp) => self.process_assistant_response(&resp.content),
             Event::ToolUse(tool_use) => self.process_tool_use(tool_use),
@@ -936,8 +957,20 @@ impl StreamContext {
                 error_code,
                 error_message,
             } => {
+                if !self.mark_upstream_failed() {
+                    return Vec::new();
+                }
                 tracing::error!("收到错误事件: {} - {}", error_code, error_message);
-                Vec::new()
+                vec![SseEvent::new(
+                    "error",
+                    json!({
+                        "type": "error",
+                        "error": {
+                            "type": "overloaded_error",
+                            "message": format!("Kiro upstream error ({error_code}): {error_message}")
+                        }
+                    }),
+                )]
             }
             Event::Exception {
                 exception_type,
@@ -1451,6 +1484,10 @@ impl StreamContext {
 
     /// 生成最终事件序列
     pub fn generate_final_events(&mut self) -> Vec<SseEvent> {
+        if self.is_upstream_failed() {
+            return Vec::new();
+        }
+
         let mut events = Vec::new();
 
         // Flush thinking_buffer 中的剩余内容
@@ -2010,6 +2047,25 @@ mod tests {
         assert!(sse_str.starts_with("event: message_start\n"));
         assert!(sse_str.contains("data: "));
         assert!(sse_str.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn test_upstream_error_emits_one_error_and_blocks_final_events() {
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, false);
+        let _ = ctx.generate_initial_events();
+
+        let event = Event::Error {
+            error_code: "TEST_ERROR".to_string(),
+            error_message: "upstream failed".to_string(),
+        };
+        let first = ctx.process_kiro_event(&event);
+        let second = ctx.process_kiro_event(&event);
+
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].event, "error");
+        assert!(second.is_empty());
+        assert!(ctx.is_upstream_failed());
+        assert!(ctx.generate_final_events().is_empty());
     }
 
     #[test]

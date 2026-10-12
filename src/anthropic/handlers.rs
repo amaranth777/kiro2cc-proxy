@@ -693,78 +693,90 @@ fn create_sse_stream(
                 chunk_result = body_stream.next() => {
                     match chunk_result {
                         Some(Ok(chunk)) => {
-                            // 解码事件
+                            // 解码事件；任一协议错误都终止本次流，不能继续正常收尾。
+                            let mut events = Vec::new();
                             if let Err(e) = decoder.feed(&chunk) {
                                 tracing::warn!("缓冲区溢出: {}", e);
+                                if ctx.mark_upstream_failed() {
+                                    events.push(stream_interrupted_error_event());
+                                }
                             }
 
-                            let mut events = Vec::new();
-                            for result in decoder.decode_iter() {
-                                match result {
-                                    Ok(frame) => {
-                                        if let Ok(event) = Event::from_frame(frame) {
-                                            let sse_events = ctx.process_kiro_event(&event);
-                                            events.extend(sse_events);
+                            if !ctx.is_upstream_failed() {
+                                for result in decoder.decode_iter() {
+                                    match result {
+                                        Ok(frame) => match Event::from_frame(frame) {
+                                            Ok(event) => {
+                                                events.extend(ctx.process_kiro_event(&event));
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("解析事件失败: {}", e);
+                                                if ctx.mark_upstream_failed() {
+                                                    events.push(stream_interrupted_error_event());
+                                                }
+                                                break;
+                                            }
+                                        },
+                                        Err(e) => {
+                                            tracing::warn!("解码事件失败: {}", e);
+                                            if ctx.mark_upstream_failed() {
+                                                events.push(stream_interrupted_error_event());
+                                            }
+                                            break;
                                         }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("解码事件失败: {}", e);
                                     }
                                 }
                             }
 
-                            // 转换为 SSE 字节流
+                            let finished = ctx.is_upstream_failed();
                             let bytes: Vec<Result<Bytes, Infallible>> = events
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
 
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval, deadline)))
+                            Some((stream::iter(bytes), (body_stream, ctx, decoder, finished, ping_interval, deadline)))
                         }
                         Some(Err(e)) => {
                             tracing::error!("读取响应流失败: {}", e);
-                            let final_events = if ctx.is_empty_response() {
-                                let oversized = ctx.empty_response_is_oversized_context();
-                                tracing::warn!(
-                                    oversized_context = oversized,
-                                    est_input_tokens = ctx.input_tokens,
-                                    "流解码错误且无内容，补发 error 事件"
-                                );
-                                if oversized {
-                                    ctx.generate_final_events()
-                                } else {
-                                    vec![empty_response_error_event(false)]
-                                }
-                            } else {
-                                tracing::warn!(
-                                    est_input_tokens = ctx.input_tokens,
-                                    "流读取错误但已产生部分内容，补发 error 事件防止伪装成正常完成"
-                                );
+                            let error_events = if ctx.mark_upstream_failed() {
                                 vec![stream_interrupted_error_event()]
+                            } else {
+                                Vec::new()
                             };
-                            let bytes: Vec<Result<Bytes, Infallible>> = final_events
+                            let bytes: Vec<Result<Bytes, Infallible>> = error_events
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
                             Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, deadline)))
                         }
                         None => {
-                            let mut out_events = Vec::new();
-                            if ctx.is_empty_response() {
+                            let out_events = if decoder.buffer_len() > 0 {
+                                tracing::warn!(
+                                    buffered_bytes = decoder.buffer_len(),
+                                    "上游在 EOF 时留下不完整帧，补发 error 事件"
+                                );
+                                if ctx.mark_upstream_failed() {
+                                    vec![stream_interrupted_error_event()]
+                                } else {
+                                    Vec::new()
+                                }
+                            } else if ctx.is_empty_response() {
                                 let oversized = ctx.empty_response_is_oversized_context();
                                 tracing::warn!(
                                     oversized_context = oversized,
                                     est_input_tokens = ctx.input_tokens,
-                                    "上游返回空响应（无任何内容事件），补发 error 事件"
+                                    "上游返回空响应，补发 error 事件"
                                 );
-                                if oversized {
-                                    out_events = ctx.generate_final_events();
+                                if ctx.mark_upstream_failed() {
+                                    vec![empty_response_error_event(oversized)]
                                 } else {
-                                    out_events.push(empty_response_error_event(false));
+                                    Vec::new()
                                 }
+                            } else if ctx.is_upstream_failed() {
+                                Vec::new()
                             } else {
-                                out_events = ctx.generate_final_events();
-                            }
+                                ctx.generate_final_events()
+                            };
                             let bytes: Vec<Result<Bytes, Infallible>> = out_events
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
@@ -782,14 +794,21 @@ fn create_sse_stream(
                 // 全局 deadline：防止上游挂起导致请求永不结束（deadline 为 None 时永不就绪）
                 _ = wait_deadline(deadline) => {
                     tracing::error!("流式转发全局超时，强制终止");
-                    let err_event = SseEvent::new("error", serde_json::json!({
-                        "type": "error",
-                        "error": {
-                            "type": "overloaded_error",
-                            "message": "Upstream response timed out (streaming mode deadline)"
-                        }
-                    }));
-                    let bytes = vec![Ok(Bytes::from(err_event.to_sse_string()))];
+                    let out_events = if ctx.mark_upstream_failed() {
+                        vec![SseEvent::new("error", serde_json::json!({
+                            "type": "error",
+                            "error": {
+                                "type": "overloaded_error",
+                                "message": "Upstream response timed out (streaming mode deadline)"
+                            }
+                        }))]
+                    } else {
+                        Vec::new()
+                    };
+                    let bytes: Vec<Result<Bytes, Infallible>> = out_events
+                        .into_iter()
+                        .map(|e| Ok(Bytes::from(e.to_sse_string())))
+                        .collect();
                     Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, deadline)))
                 }
             }

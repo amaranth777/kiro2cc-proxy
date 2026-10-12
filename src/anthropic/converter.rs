@@ -306,11 +306,14 @@ impl<T: Clone> CacheEntry<T> {
 
 fn evict_oldest_if_full<T: Clone>(map: &mut HashMap<String, CacheEntry<T>>) {
     while map.len() > SESSION_CACHE_CAPACITY {
-        // 优化：全局 Mutex 锁内避免 O(N) 扫描，使用 HashMap 迭代器提供的 O(1) 伪随机键进行淘汰
-        let Some(random_key) = map.keys().next().cloned() else {
+        let Some(oldest_key) = map
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, _)| key.clone())
+        else {
             break;
         };
-        map.remove(&random_key);
+        map.remove(&oldest_key);
     }
 }
 
@@ -319,9 +322,9 @@ static PREV_H0: OnceLock<Mutex<HashMap<String, CacheEntry<String>>>> = OnceLock:
 /// Separate frozen history[0] entries for request families sharing a session.
 /// Title-generation and main-conversation prompts must not freeze each other.
 fn history_cache_key(session_id: &str, content: &str) -> String {
-    let prefix: String = content.chars().take(512).collect();
     let mut hasher = Sha256::new();
-    hasher.update(prefix.as_bytes());
+    hasher.update(b"history-h0:");
+    hasher.update(content.as_bytes());
     format!("{session_id}#{:x}", hasher.finalize())
 }
 
@@ -855,6 +858,7 @@ fn derive_fallback_conversation_id(req: &MessagesRequest) -> Option<String> {
         .first()
         .map(|m| format!("{}:{}", m.role, collect_text_for_hash(&m.content, 4096)))
         .unwrap_or_default();
+    let system_seed = normalize_system_for_cache_id(&system_seed);
     let mut hasher = Sha256::new();
     hasher.update(b"fallback-conversation:");
     hasher.update(truncate_chars(&system_seed, 4096).as_bytes());
@@ -1813,10 +1817,9 @@ fn build_history(
             let final_content = {
                 let cache = PREV_H0.get_or_init(|| Mutex::new(HashMap::new()));
                 let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
-                // 用已归一化(cch=0)的 final_content 取前缀：cch 计费哈希每轮都变，
-                // 若混入指纹会导致同类请求 key 逐轮抖动、冻结永不命中。final_content
-                // 前 512 字符落在稳定的 agent 提示词前言，gitStatus/currentDate 在尾部
-                // reminders、cc_version 同会话内恒定，均不影响前缀稳定性。
+                // 用已归一化(cch=0)的 final_content 生成完整内容 key：cch 计费哈希每轮都变，
+                // 若混入原始值会导致同类请求 key 逐轮抖动、冻结永不命中。完整内容参与 hash，
+                // 避免仅以前缀区分而误复用后缀不同的 system prompt。
                 let h0_key = history_cache_key(session_id, &final_content);
                 if let Some(entry) = map.get_mut(&h0_key) {
                     entry.last_used = Instant::now();
@@ -2674,6 +2677,51 @@ mod tests {
         assert_eq!(tool_names.len(), 2);
         assert!(tool_names.contains(&"read".to_string()));
         assert!(tool_names.contains(&"write".to_string()));
+    }
+
+    #[test]
+    fn test_history_cache_key_uses_complete_content() {
+        let prefix = "x".repeat(512);
+        let key_a = history_cache_key("session", &format!("{prefix}a"));
+        let key_b = history_cache_key("session", &format!("{prefix}b"));
+        assert_ne!(key_a, key_b);
+        assert_eq!(key_a, history_cache_key("session", &format!("{prefix}a")));
+    }
+
+    #[test]
+    fn test_history_cache_evicts_oldest_entry() {
+        let mut map = HashMap::new();
+        let old_key = "old".to_string();
+        let mut old_entry = CacheEntry::new("old".to_string());
+        old_entry.last_used = Instant::now() - std::time::Duration::from_secs(1);
+        map.insert(old_key.clone(), old_entry);
+        for index in 0..SESSION_CACHE_CAPACITY {
+            map.insert(
+                format!("new-{index}"),
+                CacheEntry::new(index.to_string()),
+            );
+        }
+        evict_oldest_if_full(&mut map);
+        assert_eq!(map.len(), SESSION_CACHE_CAPACITY);
+        assert!(!map.contains_key(&old_key));
+    }
+
+    #[test]
+    fn test_fallback_id_ignores_dynamic_system_fields() {
+        let a = fallback_req(
+            Some("You are Claude Code.\nConversation started: 2026-10-12T10:00:00Z\nSession ID: a\nModel: sonnet\nProvider: kiro\n## Current Session Context\nfoo\n## Stable Instructions\nuse tools"),
+            &["Read"],
+            &[("user", "hello")],
+        );
+        let b = fallback_req(
+            Some("You are Claude Code.\nConversation started: 2026-10-12T11:00:00Z\nSession ID: b\nModel: opus\nProvider: other\n## Current Session Context\nbar\n## Stable Instructions\nuse tools"),
+            &["Read"],
+            &[("user", "hello")],
+        );
+        assert_eq!(
+            derive_fallback_conversation_id(&a),
+            derive_fallback_conversation_id(&b)
+        );
     }
 
     #[test]
@@ -3658,7 +3706,7 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_continuation_id_random_when_no_metadata() {
+    fn test_agent_continuation_id_stable_when_fallback_features_exist() {
         use super::super::types::{Message as AnthropicMessage, SystemMessage, Tool};
 
         let make_req = || MessagesRequest {
@@ -3689,14 +3737,15 @@ mod tests {
         let result1 = convert_request(&make_req()).unwrap();
         let result2 = convert_request(&make_req()).unwrap();
 
-        assert_ne!(
+        assert_eq!(
             result1.conversation_state.conversation_id,
             result2.conversation_state.conversation_id,
+            "有稳定 system/tools 特征时 fallback conversationId 应稳定"
         );
-        assert_ne!(
+        assert_eq!(
             result1.conversation_state.agent_continuation_id,
             result2.conversation_state.agent_continuation_id,
-            "无 metadata 时 agentContinuationId 应该随机（每次不同）"
+            "fallback conversationId 稳定时 agentContinuationId 也应稳定"
         );
     }
 

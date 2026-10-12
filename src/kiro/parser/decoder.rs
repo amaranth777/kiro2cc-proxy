@@ -432,6 +432,7 @@ mod tests {
         let result = decoder.decode();
         assert!(matches!(result, Ok(None)));
         assert_eq!(decoder.state(), DecoderState::Ready);
+        assert_eq!(decoder.buffer_len(), 10, "EOF 前残留字节必须可被上层检测");
     }
 
     #[test]
