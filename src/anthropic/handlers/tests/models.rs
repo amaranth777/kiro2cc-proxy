@@ -60,6 +60,26 @@ mod tests {
         assert_eq!(hit.unwrap()[0].id, "cached-a");
     }
 
+    #[test]
+    fn test_cached_if_fresh_hides_blocked_models() {
+        let cache = new_cache(Some(crate::anthropic::middleware::CachedModels {
+            models: vec![fake_model("auto"), fake_model("future-model")],
+            fetched_at: std::time::Instant::now(),
+        }));
+        let hit = cached_if_fresh(&cache, Duration::from_secs(3600)).unwrap();
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].id, "future-model");
+    }
+
+    #[test]
+    fn test_cached_if_fresh_rejects_cache_containing_only_blocked_models() {
+        let cache = new_cache(Some(crate::anthropic::middleware::CachedModels {
+            models: vec![fake_model("auto")],
+            fetched_at: std::time::Instant::now(),
+        }));
+        assert!(cached_if_fresh(&cache, Duration::from_secs(3600)).is_none());
+    }
+
     // 分支 1 反例：缓存过期 → 视为未命中
     #[test]
     fn test_cached_if_fresh_expired() {
@@ -82,6 +102,28 @@ mod tests {
         // 缓存已写入
         let guard = cache.read();
         assert_eq!(guard.as_ref().unwrap().models[0].id, "fresh");
+    }
+
+    #[test]
+    fn test_resolve_after_refresh_hides_blocked_models() {
+        let cache = new_cache(None);
+        let out = resolve_after_refresh(
+            &cache,
+            Some(vec![fake_model("auto"), fake_model("future-model")]),
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "future-model");
+        let guard = cache.read();
+        assert_eq!(guard.as_ref().unwrap().models.len(), 1);
+        assert_eq!(guard.as_ref().unwrap().models[0].id, "future-model");
+    }
+
+    #[test]
+    fn test_resolve_after_refresh_falls_back_when_all_models_are_blocked() {
+        let cache = new_cache(None);
+        let out = resolve_after_refresh(&cache, Some(vec![fake_model("auto")]));
+        assert_eq!(out.len(), build_model_list().len());
+        assert!(out.iter().any(|model| model.id == "claude-3-5-sonnet-20241022"));
     }
 
     // 分支 3：刷新失败但有旧缓存 → 续用旧缓存
@@ -137,6 +179,36 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_get_model_blocked_model_not_found() {
+        let resp = get_model(
+            State(test_state()),
+            axum::extract::Path("auto".to_string()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_build_model_list_hides_blocked_models() {
+        let list = build_model_list();
+        for id in [
+            "auto",
+            "claude-opus-4.5",
+            "claude-sonnet-4.5",
+            "claude-sonnet-4",
+            "claude-haiku-4.5",
+            "deepseek-3.2",
+            "minimax-m2.5",
+            "minimax-m2.1",
+            "glm-5",
+            "qwen3-coder-next",
+        ] {
+            assert!(!list.iter().any(|model| model.id == id), "{id} 不应可见");
+        }
+        assert!(list.iter().any(|model| model.id == "claude-sonnet-4-6"));
     }
 
     #[test]

@@ -11,6 +11,20 @@ use axum::{
 };
 use std::time::Duration;
 
+/// 仅屏蔽显式列出的模型；未列出的模型保持可见，便于新模型无需改代码即可发现。
+const BLOCKED_MODEL_IDS: &[&str] = &[
+    "auto",
+    "claude-opus-4.5",
+    "claude-sonnet-4.5",
+    "claude-sonnet-4",
+    "claude-haiku-4.5",
+    "deepseek-3.2",
+    "minimax-m2.5",
+    "minimax-m2.1",
+    "glm-5",
+    "qwen3-coder-next",
+];
+
 /// GET /v1/models
 ///
 /// 返回可用的模型列表（动态来源，带 TTL 缓存 + 静态表回退）
@@ -26,6 +40,17 @@ pub async fn get_models(State(state): State<AppState>) -> impl IntoResponse {
 /// 模型缓存别名，简化签名
 pub(crate) type ModelCache =
     std::sync::Arc<parking_lot::RwLock<Option<super::super::middleware::CachedModels>>>;
+
+fn is_blocked_model(id: &str) -> bool {
+    BLOCKED_MODEL_IDS.contains(&id)
+}
+
+fn visible_models(models: Vec<Model>) -> Vec<Model> {
+    models
+        .into_iter()
+        .filter(|model| !is_blocked_model(&model.id))
+        .collect()
+}
 
 /// 动态获取模型列表：优先上游实时响应（带 TTL 缓存），失败按顺序回退。
 ///
@@ -45,14 +70,15 @@ pub(crate) async fn fetch_models_dynamic(state: &AppState) -> Vec<Model> {
 
     // 分支 1：缓存命中且未过期
     if let Some(hit) = cached_if_fresh(&state.model_cache, ttl) {
-        return hit;
+        return visible_models(hit);
     }
 
     // 缓存缺失/过期，尝试刷新上游（仅此处涉及网络；结果归一化为 Option<Vec<Model>>）
     let refreshed: Option<Vec<Model>> = match provider.token_manager().list_available_models().await
     {
         Ok(resp) if !resp.models.is_empty() => {
-            Some(resp.models.iter().map(available_model_to_model).collect())
+            let models = visible_models(resp.models.iter().map(available_model_to_model).collect());
+            (!models.is_empty()).then_some(models)
         }
         Ok(_) => {
             tracing::warn!("上游模型列表为空，回退缓存/静态表");
@@ -73,7 +99,8 @@ pub(crate) fn cached_if_fresh(cache: &ModelCache, ttl: Duration) -> Option<Vec<M
     guard
         .as_ref()
         .filter(|cached| cached.fetched_at.elapsed() < ttl)
-        .map(|cached| cached.models.clone())
+        .map(|cached| visible_models(cached.models.clone()))
+        .filter(|models| !models.is_empty())
 }
 
 /// 刷新结果落地（纯逻辑，无网络）：
@@ -85,21 +112,24 @@ pub(crate) fn resolve_after_refresh(
     refreshed: Option<Vec<Model>>,
 ) -> Vec<Model> {
     if let Some(models) = refreshed {
-        *cache.write() = Some(super::super::middleware::CachedModels {
-            models: models.clone(),
-            fetched_at: std::time::Instant::now(),
-        });
-        return models;
+        let models = visible_models(models);
+        if !models.is_empty() {
+            *cache.write() = Some(super::super::middleware::CachedModels {
+                models: models.clone(),
+                fetched_at: std::time::Instant::now(),
+            });
+            return models;
+        }
     }
     if let Some(cached) = cache.read().as_ref() {
-        return cached.models.clone();
+        return visible_models(cached.models.clone());
     }
     build_model_list()
 }
 
 /// 构建可用模型列表（供 get_models 和 get_model 共用）
 pub(crate) fn build_model_list() -> Vec<Model> {
-    vec![
+    visible_models(vec![
         // === 旧版模型 ID（兼容旧版 Claude Code 客户端） ===
         // 这些旧 ID 在 map_model() 中会被正确映射到对应的 Kiro 模型
         Model {
@@ -438,7 +468,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             model_type: "chat".to_string(),
             max_tokens: 32000,
         },
-    ]
+    ])
 }
 
 /// 根据模型 ID 前缀推断提供方（ListAvailableModels 响应不含厂商归属字段）
