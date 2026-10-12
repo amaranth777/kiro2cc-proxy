@@ -4,12 +4,14 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::kiro::model::credentials::KiroCredentials;
+use crate::kiro::model::available_models::AvailableModelInfo;
 use crate::kiro::token_manager::{MultiTokenManager, UsageLimitsUnsupportedError};
 use crate::model::throttle_log::ThrottleLogStore;
 
@@ -44,6 +46,17 @@ fn live_model_to_admin_item(
         rate_multiplier: info.rate_multiplier,
         released_at: super::model_release::release_date(&info.model_id).map(str::to_string),
     }
+}
+
+fn live_model_items(models: &[AvailableModelInfo]) -> Vec<super::types::AdminModelItem> {
+    models
+        .iter()
+        .filter(|info| {
+            !info.model_id.trim().is_empty()
+                && !crate::anthropic::handlers::is_blocked_model(&info.model_id)
+        })
+        .map(live_model_to_admin_item)
+        .collect()
 }
 
 /// 将本地静态模型条目映射为 `AdminModelItem`（上游调用失败时的回退路径）
@@ -274,19 +287,39 @@ impl AdminService {
         })
     }
 
-    /// 获取当前支持模型列表（直接来源于上游 ListAvailableModels 实时响应）
+    /// 获取当前支持模型列表（优先共享动态元数据，其次实时查询）
     ///
-    /// 每次实时调用，不做缓存；上游调用失败（无可用账号、网络错误、非 2xx、
-    /// 反序列化失败）时记录日志并回退到本地静态模型表（`rate_multiplier` 全为 `None`）。
+    /// Kiro 返回的原始模型元数据由 `MultiTokenManager` 共享存储；上游调用失败
+    /// （无可用账号、网络错误、非 2xx、反序列化失败）时平滑回退到本地静态模型表。
     pub async fn list_admin_models(&self) -> Vec<super::types::AdminModelItem> {
-        let items = match self.token_manager.list_available_models().await {
-            Ok(resp) => resp.models.iter().map(live_model_to_admin_item).collect(),
-            Err(e) => {
-                tracing::warn!("获取实时支持模型列表失败，回退到本地静态模型表: {}", e);
-                crate::anthropic::handlers::build_model_list()
-                    .into_iter()
-                    .map(fallback_model_to_admin_item)
-                    .collect()
+        let ttl = Duration::from_secs(self.token_manager.config().model_cache_ttl_secs);
+        let cached_items = self
+            .token_manager
+            .cached_model_catalog(ttl)
+            .map(|models| live_model_items(&models))
+            .filter(|items| !items.is_empty());
+        let items = if let Some(items) = cached_items {
+            items
+        } else {
+            match self.token_manager.list_available_models().await {
+                Ok(resp) => {
+                    let items = live_model_items(&resp.models);
+                    if items.is_empty() {
+                        crate::anthropic::handlers::build_model_list()
+                            .into_iter()
+                            .map(fallback_model_to_admin_item)
+                            .collect()
+                    } else {
+                        items
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("获取实时支持模型列表失败，回退到本地静态模型表: {}", e);
+                    crate::anthropic::handlers::build_model_list()
+                        .into_iter()
+                        .map(fallback_model_to_admin_item)
+                        .collect()
+                }
             }
         };
         group_models_by_family(items)
@@ -305,7 +338,7 @@ impl AdminService {
             .list_available_models_for(id)
             .await
             .map_err(|e| self.classify_balance_error(e, id))?;
-        let items: Vec<AdminModelItem> = resp.models.iter().map(live_model_to_admin_item).collect();
+        let items: Vec<AdminModelItem> = live_model_items(&resp.models);
         Ok(AdminModelsResponse {
             object: "list".to_string(),
             data: group_models_by_family(items),
@@ -701,6 +734,19 @@ mod tests {
         let unknown_item = live_model_to_admin_item(&unknown);
         assert_eq!(unknown_item.model.owned_by, "unknown");
         assert_eq!(unknown_item.rate_multiplier, None);
+    }
+
+    #[test]
+    fn test_live_model_items_hides_blocked_and_empty_models() {
+        let models = vec![
+            fake_info("auto", "Auto", Some(1.0), 100, 50),
+            fake_info("", "", None, 100, 50),
+            fake_info("future-model", "Future Model", None, 100, 50),
+        ];
+
+        let items = live_model_items(&models);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].model.id, "future-model");
     }
 
     #[test]

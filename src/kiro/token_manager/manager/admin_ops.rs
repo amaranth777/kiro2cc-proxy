@@ -11,12 +11,12 @@ use super::super::refresh::{
 use super::super::types::{
     CredentialEntrySnapshot, ManagerSnapshot, MultiTokenManager, TOKEN_REFRESH_COOLDOWN,
 };
-use crate::kiro::model::available_models::AvailableModelsResponse;
+use crate::kiro::model::available_models::{AvailableModelInfo, AvailableModelsResponse};
 use crate::kiro::model::credentials::KiroCredentials;
 use crate::kiro::model::credentials::canonicalize_auth_method_value;
 use crate::kiro::model::usage_limits::UsageLimitsResponse;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 impl MultiTokenManager {
     /// 切换到优先级最高的可用账号
@@ -49,13 +49,22 @@ impl MultiTokenManager {
     pub async fn list_available_models(&self) -> anyhow::Result<AvailableModelsResponse> {
         let ctx = self.acquire_context(None).await?;
         let effective_proxy = ctx.credentials.effective_proxy(self.proxy.as_ref());
-        list_available_models(
+        let response = list_available_models(
             &ctx.credentials,
             &self.config,
             &ctx.token,
             effective_proxy.as_ref(),
         )
-        .await
+        .await?;
+        if !response.models.is_empty() {
+            self.model_catalog.remember(response.models.clone());
+        }
+        Ok(response)
+    }
+
+    /// 读取仍在 TTL 内的共享动态模型元数据。
+    pub fn cached_model_catalog(&self, ttl: Duration) -> Option<Vec<AvailableModelInfo>> {
+        self.model_catalog.fresh(ttl)
     }
 
     /// 获取指定账号支持的模型列表（含官方费率倍率）

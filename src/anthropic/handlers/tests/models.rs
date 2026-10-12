@@ -4,8 +4,8 @@
 mod tests {
 
     use super::super::super::models::{
-        ModelCache, available_model_to_model, build_model_list, cached_if_fresh,
-        fetch_models_dynamic, get_model, guess_owned_by, resolve_after_refresh,
+        ModelCache, available_model_to_model, build_model_catalog, build_model_list,
+        cached_if_fresh, fetch_models_dynamic, get_model, guess_owned_by, resolve_after_refresh,
     };
 
     use crate::anthropic::middleware::AppState;
@@ -126,15 +126,17 @@ mod tests {
         assert!(out.iter().any(|model| model.id == "claude-3-5-sonnet-20241022"));
     }
 
-    // 分支 3：刷新失败但有旧缓存 → 续用旧缓存
+    // 分支 3：刷新失败但有旧缓存 → 仍平滑回退静态表
     #[test]
-    fn test_resolve_after_refresh_failure_uses_old_cache() {
+    fn test_resolve_after_refresh_failure_falls_back_static_despite_old_cache() {
         let cache = new_cache(Some(crate::anthropic::middleware::CachedModels {
             models: vec![fake_model("old")],
             fetched_at: std::time::Instant::now(),
         }));
         let out = resolve_after_refresh(&cache, None);
-        assert_eq!(out[0].id, "old");
+        assert_eq!(out.len(), build_model_list().len());
+        assert!(out.iter().any(|model| model.id == "claude-3-5-sonnet-20241022"));
+        assert!(!out.iter().any(|model| model.id == "old"));
     }
 
     // 分支 4：刷新失败且无缓存 → 回退静态表
@@ -231,6 +233,51 @@ mod tests {
         assert_eq!(m.max_tokens, 64_000);
         assert_eq!(m.object, "model");
         assert_eq!(m.model_type, "chat");
+    }
+
+    #[test]
+    fn test_build_model_catalog_enriches_static_and_appends_new_models() {
+        use crate::kiro::model::available_models::{AvailableModelInfo, TokenLimits};
+
+        let metadata = vec![
+            AvailableModelInfo {
+                model_id: "claude-sonnet-4-6".to_string(),
+                model_name: "Live Sonnet".to_string(),
+                rate_multiplier: Some(1.3),
+                token_limits: TokenLimits {
+                    max_input_tokens: 1_000_000,
+                    max_output_tokens: 99_999,
+                },
+                additional_model_request_fields_schema: None,
+            },
+            AvailableModelInfo {
+                model_id: "future-model".to_string(),
+                model_name: "Future Model".to_string(),
+                rate_multiplier: None,
+                token_limits: TokenLimits::default(),
+                additional_model_request_fields_schema: None,
+            },
+        ];
+
+        let models = build_model_catalog(Some(&metadata), true);
+        let sonnet = models
+            .iter()
+            .find(|model| model.id == "claude-sonnet-4-6")
+            .unwrap();
+        assert_eq!(sonnet.display_name, "Live Sonnet");
+        assert_eq!(sonnet.max_tokens, 99_999);
+        assert!(models.iter().any(|model| model.id == "future-model"));
+        assert!(models.iter().any(|model| model.id == "claude-opus-5"));
+
+        let fallback = build_model_catalog(Some(&metadata), false);
+        assert!(fallback.iter().any(|model| model.id == "claude-opus-5"));
+        assert!(!fallback.iter().any(|model| model.id == "future-model"));
+        let fallback_sonnet = fallback
+            .iter()
+            .find(|model| model.id == "claude-sonnet-4-6")
+            .unwrap();
+        assert_eq!(fallback_sonnet.display_name, "Claude Sonnet 4.6");
+        assert_eq!(fallback_sonnet.max_tokens, 64_000);
     }
 
     #[test]

@@ -12,9 +12,11 @@ use crate::http_client::ProxyConfig;
 use crate::kiro::machine_id;
 use crate::kiro::model::credentials::KiroCredentials;
 use crate::model::config::Config;
+use crate::model::model_catalog::ModelCatalogStore;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::Mutex as TokioMutex;
@@ -155,6 +157,7 @@ impl MultiTokenManager {
             persist_lock: Mutex::new(()),
             next_id_counter: AtomicU64::new(final_max_id),
             max_rpm_per_credential: AtomicU32::new(max_rpm),
+            model_catalog: Arc::new(ModelCatalogStore::default()),
         };
 
         // 持久化历史最大 ID 计数器（即使本次没有新增账号，也要确保计数器文件与内存一致，

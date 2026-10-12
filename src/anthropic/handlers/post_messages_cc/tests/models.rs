@@ -101,15 +101,17 @@ mod tests {
         assert_eq!(guard.as_ref().unwrap().models[0].id, "fresh");
     }
 
-    // 分支 3：刷新失败但有旧缓存 → 续用旧缓存
+    // 分支 3：刷新失败但有旧缓存 → 仍平滑回退静态表
     #[test]
-    fn test_resolve_after_refresh_failure_uses_old_cache() {
+    fn test_resolve_after_refresh_failure_falls_back_static_despite_old_cache() {
         let cache = new_cache(Some(super::super::super::middleware::CachedModels {
             models: vec![fake_model("old")],
             fetched_at: std::time::Instant::now(),
         }));
         let out = resolve_after_refresh(&cache, None);
-        assert_eq!(out[0].id, "old");
+        assert_eq!(out.len(), build_model_list().len());
+        assert!(out.iter().any(|model| model.id == "claude-3-5-sonnet-20241022"));
+        assert!(!out.iter().any(|model| model.id == "old"));
     }
 
     // 分支 4：刷新失败且无缓存 → 回退静态表

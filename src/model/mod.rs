@@ -6,6 +6,7 @@ pub mod arg;
 pub mod config;
 pub mod failure_log;
 pub mod geo;
+pub mod model_catalog;
 pub mod rpm;
 pub mod throttle_log;
 pub mod usage;

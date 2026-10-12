@@ -3,6 +3,7 @@
 
 use crate::anthropic::middleware::AppState;
 use crate::anthropic::types::{ErrorResponse, Model, ModelsResponse};
+use crate::kiro::model::available_models::AvailableModelInfo;
 
 use axum::{
     extract::State,
@@ -41,7 +42,7 @@ pub async fn get_models(State(state): State<AppState>) -> impl IntoResponse {
 pub(crate) type ModelCache =
     std::sync::Arc<parking_lot::RwLock<Option<super::super::middleware::CachedModels>>>;
 
-fn is_blocked_model(id: &str) -> bool {
+pub(crate) fn is_blocked_model(id: &str) -> bool {
     BLOCKED_MODEL_IDS.contains(&id)
 }
 
@@ -52,16 +53,46 @@ fn visible_models(models: Vec<Model>) -> Vec<Model> {
         .collect()
 }
 
+/// 将静态模型表与 Kiro 动态元数据合并。
+///
+/// 静态条目始终保留，动态数据只补充其展示名和输出上限；仅在动态发现成功时
+/// 追加静态表之外的新模型。发现失败时可传 `use_dynamic_metadata=false`，平滑
+/// 回退到静态模型信息。
+pub(crate) fn build_model_catalog(
+    metadata: Option<&[AvailableModelInfo]>,
+    use_dynamic_metadata: bool,
+) -> Vec<Model> {
+    if !use_dynamic_metadata {
+        return build_model_list();
+    }
+
+    let mut models = build_model_list();
+    for info in metadata.unwrap_or_default() {
+        if info.model_id.trim().is_empty() || is_blocked_model(&info.model_id) {
+            continue;
+        }
+
+        let discovered = available_model_to_model(info);
+        if let Some(model) = models.iter_mut().find(|model| model.id == discovered.id) {
+            model.display_name = discovered.display_name;
+            model.max_tokens = discovered.max_tokens;
+        } else if use_dynamic_metadata {
+            models.push(discovered);
+        }
+    }
+    models
+}
+
 /// 动态获取模型列表：优先上游实时响应（带 TTL 缓存），失败按顺序回退。
 ///
 /// 分支：
 /// 1. 缓存存在且未过期 → 直接返回缓存，不打上游
-/// 2. 缓存过期/缺失且上游成功返回非空模型集 → 映射、写缓存、返回
-/// 3. 上游失败但存在旧缓存 → 续用旧缓存（warn）
-/// 4. 上游失败且无缓存 → 回退静态表 `build_model_list()`（warn）
-/// 5. 未配置 `kiro_provider` → 直接回退静态表（无上游可查）
+/// 2. 共享动态元数据仍在 TTL 内 → 合并静态表后返回
+/// 3. 未配置 `kiro_provider` → 直接回退静态表（无上游可查）
+/// 4. 上游成功返回非空模型集 → 合并静态表、写缓存、返回
+/// 5. 上游失败 → 平滑回退静态表 `build_model_list()`（warn）
 pub(crate) async fn fetch_models_dynamic(state: &AppState) -> Vec<Model> {
-    // 分支 5：无上游 provider，直接静态表
+    // 未配置上游 provider，直接静态表
     let Some(provider) = state.kiro_provider.as_ref() else {
         return build_model_list();
     };
@@ -73,19 +104,23 @@ pub(crate) async fn fetch_models_dynamic(state: &AppState) -> Vec<Model> {
         return visible_models(hit);
     }
 
+    if let Some(metadata) = provider.token_manager().cached_model_catalog(ttl) {
+        return build_model_catalog(Some(&metadata), true);
+    }
+
     // 缓存缺失/过期，尝试刷新上游（仅此处涉及网络；结果归一化为 Option<Vec<Model>>）
     let refreshed: Option<Vec<Model>> = match provider.token_manager().list_available_models().await
     {
         Ok(resp) if !resp.models.is_empty() => {
-            let models = visible_models(resp.models.iter().map(available_model_to_model).collect());
+            let models = build_model_catalog(Some(&resp.models), true);
             (!models.is_empty()).then_some(models)
         }
         Ok(_) => {
-            tracing::warn!("上游模型列表为空，回退缓存/静态表");
+            tracing::warn!("上游模型列表为空，回退静态表");
             None
         }
         Err(e) => {
-            tracing::warn!(error = %e, "刷新上游模型列表失败，回退缓存/静态表");
+            tracing::warn!(error = %e, "刷新上游模型列表失败，回退静态表");
             None
         }
     };
@@ -105,8 +140,7 @@ pub(crate) fn cached_if_fresh(cache: &ModelCache, ttl: Duration) -> Option<Vec<M
 
 /// 刷新结果落地（纯逻辑，无网络）：
 /// - `Some(非空)` → 写缓存并返回（分支 2）
-/// - `None` 且有旧缓存 → 续用旧缓存（分支 3）
-/// - `None` 且无缓存 → 静态表（分支 4）
+/// - `None` → 平滑回退静态表（分支 3/4）
 pub(crate) fn resolve_after_refresh(
     cache: &ModelCache,
     refreshed: Option<Vec<Model>>,
@@ -120,9 +154,6 @@ pub(crate) fn resolve_after_refresh(
             });
             return models;
         }
-    }
-    if let Some(cached) = cache.read().as_ref() {
-        return visible_models(cached.models.clone());
     }
     build_model_list()
 }
@@ -507,9 +538,13 @@ pub(crate) fn available_model_to_model(
         object: "model".to_string(),
         created: 0,
         owned_by: guess_owned_by(&info.model_id).to_string(),
-        display_name: info.model_name.clone(),
+        display_name: if info.model_name.trim().is_empty() {
+            info.model_id.clone()
+        } else {
+            info.model_name.clone()
+        },
         model_type: "chat".to_string(),
-        max_tokens: info.token_limits.max_output_tokens as i32,
+        max_tokens: i32::try_from(info.token_limits.max_output_tokens).unwrap_or(i32::MAX),
     }
 }
 

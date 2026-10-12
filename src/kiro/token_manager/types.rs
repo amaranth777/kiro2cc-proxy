@@ -2,7 +2,9 @@
 use super::entry::{CredentialEntry, DisabledReason, HealthStatus};
 use crate::http_client::ProxyConfig;
 use crate::kiro::model::credentials::KiroCredentials;
+use crate::model::model_catalog::ModelCatalogStore;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use tokio::sync::Mutex as TokioMutex;
@@ -129,6 +131,8 @@ pub struct MultiTokenManager {
     /// 每账号 RPM 上限（运行时可经 Admin API 热切换；0 = 不限）。
     /// 独立于 config 持久化值，避免为热切换引入 Config 内部可变性
     pub(crate) max_rpm_per_credential: AtomicU32,
+    /// Kiro 动态模型元数据共享目录
+    pub(crate) model_catalog: Arc<ModelCatalogStore>,
 }
 
 /// 每个账号最大 API 调用失败次数
