@@ -54,9 +54,8 @@ const TZ_LABEL = (() => {
 })()
 
 /**
- * 后端时间戳为 UTC（`src/log_capture.rs` 的 `chrono::Utc::now()`），改版前只做
- * `replace('T',' ').replace('Z','')`，等于把 UTC 时钟当本地时间显示。此处按浏览器
- * 时区渲染，并由页脚标注实际时区。固定 24 小时制 + 毫秒，故不走 toLocaleTimeString。
+ * 后端时间戳带明确时区偏移。此处统一按浏览器时区渲染，并由页脚标注实际时区。
+ * 固定 24 小时制 + 毫秒，故不走 toLocaleTimeString。
  */
 function localClock(timestamp: string, withMs = false): string {
   const ms = Date.parse(timestamp)

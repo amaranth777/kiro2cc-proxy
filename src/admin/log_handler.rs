@@ -138,7 +138,7 @@ pub async fn download_logs(
         ));
     }
 
-    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S%z").to_string();
     let disposition = format!(
         "attachment; filename=\"kiro2cc-proxy-logs-{}.txt\"",
         timestamp

@@ -77,8 +77,8 @@ impl<S: Subscriber> Layer<S> for LogCaptureLayer {
         event.record(&mut MessageVisitor(&mut message));
 
         let entry = LogEntry {
-            timestamp: chrono::Utc::now()
-                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            timestamp: chrono::Local::now()
+                .format("%Y-%m-%dT%H:%M:%S%.3f%:z")
                 .to_string(),
             level: level.to_string(),
             target: metadata.target().to_string(),

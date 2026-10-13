@@ -47,7 +47,11 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
         };
         tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_filter(make_filter()))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
+                    .with_filter(make_filter()),
+            )
             .with(log_capture.as_layer().with_filter(make_filter()))
             .init();
     }
