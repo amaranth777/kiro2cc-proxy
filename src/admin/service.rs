@@ -758,6 +758,7 @@ mod tests {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3.5 Sonnet".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 8192,
         };
         let expected_id = model.id.clone();
@@ -812,6 +813,7 @@ mod tests {
                     owned_by: owned_by.to_string(),
                     display_name: id.to_string(),
                     model_type: "chat".to_string(),
+                    context_window: None,
                     max_tokens: 64_000,
                 },
                 rate_multiplier: None,

@@ -57,6 +57,7 @@ mod tests {
             owned_by: "test".to_string(),
             display_name: id.to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 8192,
         }
     }

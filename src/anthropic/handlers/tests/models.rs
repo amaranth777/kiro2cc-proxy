@@ -40,6 +40,7 @@ mod tests {
             owned_by: "test".to_string(),
             display_name: id.to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 8192,
         }
     }
@@ -222,7 +223,7 @@ mod tests {
             rate_multiplier: Some(1.3),
             token_limits: TokenLimits {
                 max_input_tokens: 1_000_000,
-                max_output_tokens: 64_000,
+                max_output_tokens: 128_000,
             },
             additional_model_request_fields_schema: None,
         };
@@ -230,7 +231,8 @@ mod tests {
         assert_eq!(m.id, "claude-sonnet-4.6");
         assert_eq!(m.display_name, "Claude Sonnet 4.6");
         assert_eq!(m.owned_by, "anthropic");
-        assert_eq!(m.max_tokens, 64_000);
+        assert_eq!(m.context_window, Some(1_000_000));
+        assert_eq!(m.max_tokens, 128_000);
         assert_eq!(m.object, "model");
         assert_eq!(m.model_type, "chat");
     }

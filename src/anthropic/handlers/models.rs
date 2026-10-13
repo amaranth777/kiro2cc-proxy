@@ -75,6 +75,7 @@ pub(crate) fn build_model_catalog(
         let discovered = available_model_to_model(info);
         if let Some(model) = models.iter_mut().find(|model| model.id == discovered.id) {
             model.display_name = discovered.display_name;
+            model.context_window = discovered.context_window;
             model.max_tokens = discovered.max_tokens;
         } else if use_dynamic_metadata {
             models.push(discovered);
@@ -170,6 +171,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3.5 Sonnet".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 8192,
         },
         Model {
@@ -179,6 +181,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3.5 Haiku".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 8192,
         },
         Model {
@@ -188,6 +191,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3 Opus".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 4096,
         },
         Model {
@@ -197,6 +201,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3 Haiku".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 4096,
         },
         Model {
@@ -206,6 +211,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude 3 Sonnet".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 4096,
         },
         // === Claude 4.x 过渡期模型 ID ===
@@ -216,6 +222,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -225,6 +232,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -234,6 +242,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         // === 当前主力模型 ===
@@ -244,6 +253,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.5".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -253,6 +263,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -262,6 +273,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.5".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -271,6 +283,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -280,6 +293,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.6".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -289,6 +303,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -298,6 +313,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 5".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -307,6 +323,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Sonnet 5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -316,6 +333,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.6".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -325,6 +343,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.6 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -334,6 +353,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.7".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -343,6 +363,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.7 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -352,6 +373,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.8".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -361,6 +383,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 4.8 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -370,6 +393,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 5".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -379,6 +403,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -388,6 +413,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Fable 5".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -397,6 +423,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Fable 5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 128000,
         },
         Model {
@@ -406,6 +433,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Haiku 4.5".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         Model {
@@ -415,6 +443,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "anthropic".to_string(),
             display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 64000,
         },
         // === 非 Claude 模型 ===
@@ -425,6 +454,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "kiro".to_string(),
             display_name: "Auto (智能路由)".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 32000,
         },
         Model {
@@ -434,6 +464,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "deepseek".to_string(),
             display_name: "DeepSeek 3.2".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 32000,
         },
         Model {
@@ -443,6 +474,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "glm".to_string(),
             display_name: "GLM-5".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 32000,
         },
         Model {
@@ -452,6 +484,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "minimax".to_string(),
             display_name: "MiniMax M2.5".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 32000,
         },
         Model {
@@ -461,6 +494,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "minimax".to_string(),
             display_name: "MiniMax M2.1".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 32000,
         },
         Model {
@@ -470,6 +504,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "qwen".to_string(),
             display_name: "Qwen3 Coder Next".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 32000,
         },
         Model {
@@ -479,6 +514,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "openai".to_string(),
             display_name: "GPT-5.6 Sol".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 32000,
         },
         Model {
@@ -488,6 +524,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "openai".to_string(),
             display_name: "GPT-5.6 Terra".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 32000,
         },
         Model {
@@ -497,6 +534,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "openai".to_string(),
             display_name: "GPT-5.6 Luna".to_string(),
             model_type: "chat".to_string(),
+            context_window: None,
             max_tokens: 32000,
         },
     ])
@@ -544,6 +582,9 @@ pub(crate) fn available_model_to_model(
             info.model_name.clone()
         },
         model_type: "chat".to_string(),
+        context_window: i32::try_from(info.token_limits.max_input_tokens)
+            .ok()
+            .filter(|value| *value > 0),
         max_tokens: i32::try_from(info.token_limits.max_output_tokens).unwrap_or(i32::MAX),
     }
 }

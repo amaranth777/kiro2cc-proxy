@@ -50,6 +50,8 @@ pub struct Model {
     pub display_name: String,
     #[serde(rename = "type")]
     pub model_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i32>,
     pub max_tokens: i32,
 }
 
