@@ -9,7 +9,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::http_client::{ProxyConfig, build_client};
+use crate::http_client::{ProxyConfig, build_upstream_client};
 use crate::kiro::endpoint::{Endpoint, EndpointBucketRegistry, EndpointName};
 use crate::kiro::model::credentials::KiroCredentials;
 use crate::kiro::token_manager::MultiTokenManager;
@@ -32,17 +32,12 @@ pub(crate) const MAX_CONCURRENT_REQUESTS: usize = 50;
 /// 单账号最大并发请求数
 pub(crate) const MAX_CONCURRENT_PER_CREDENTIAL: usize = 20;
 
-/// 所有上游 API 请求统一使用的 HTTP 总超时（秒）。
+/// 生成请求响应读取停滞检测阈值（秒）。
 ///
-/// 历史上曾按请求类型分档：压缩请求 1000s（历史修复 commit 9338888，大上下文
-/// 非流式 502），普通请求 180s（commit d669fb6，意图是让网络异常时报错更快）。
-/// 但 `reqwest::Client::timeout` 是覆盖「发请求到读完整个响应体」的总超时，
-/// 流式响应的持续生成阶段同样受它约束——100K+ 输入的长生成请求实测可超过 180s，
-/// 会被该超时在中途掐断（表现为 `error decoding response body` / 502），
-/// 生产日志已实证（三次流式失败 + 一次非流式 502 耗时全部 ≈180s）。
-/// 故统一回 1000s：上游正常生成耗时不受影响（超时只是上限），
-/// 真正挂死的连接由 TCP keepalive 与客户端自身重试兜底。
-pub(crate) const UPSTREAM_TIMEOUT_SECS: u64 = 1000;
+/// 该值不是总 deadline；每次成功读取响应数据后都会重置，因此不会限制
+/// 持续输出的长生成请求。非流式生成可能直到结束才返回 body，也使用该
+/// 较大阈值避免把正常长生成误判为网络停滞。
+pub(crate) const UPSTREAM_READ_TIMEOUT_SECS: u64 = 1000;
 
 /// Kiro API Provider
 ///
@@ -52,12 +47,9 @@ pub struct KiroProvider {
     pub(crate) token_manager: Arc<MultiTokenManager>,
     /// 全局代理配置（用于账号无自定义代理时的回退）
     pub(crate) global_proxy: Option<ProxyConfig>,
-    /// Client 缓存：key = (effective proxy config, use_long_timeout)，value = reqwest::Client
+    /// Client 缓存：key = effective proxy config，value = reqwest::Client。
     /// 不同代理配置的账号使用不同的 Client，共享相同代理的账号复用 Client。
-    /// 历史上按请求类型分两档超时（压缩/流式 1000s vs 普通 180s），现已统一为
-    /// UPSTREAM_TIMEOUT_SECS=1000s，但缓存结构保留 bool 维度以兼容既有调用点
-    /// （见 `client_for`）。
-    pub(crate) client_cache: Mutex<HashMap<(Option<ProxyConfig>, bool), Client>>,
+    pub(crate) client_cache: Mutex<HashMap<Option<ProxyConfig>, Client>>,
     /// TLS 后端配置
     pub(crate) tls_backend: TlsBackend,
     /// 额外信任的 CA 证书路径（PEM 格式）
@@ -87,16 +79,16 @@ impl KiroProvider {
     pub fn with_proxy(token_manager: Arc<MultiTokenManager>, proxy: Option<ProxyConfig>) -> Self {
         let tls_backend = token_manager.config().tls_backend;
         let ca_cert_path = token_manager.config().ca_cert_path.clone();
-        // 预热：为全局代理配置构建普通超时 Client（长超时 Client 按需懒创建）
-        let initial_client = build_client(
+        // 预热：为全局代理配置构建生成请求 Client
+        let initial_client = build_upstream_client(
             proxy.as_ref(),
-            UPSTREAM_TIMEOUT_SECS,
+            UPSTREAM_READ_TIMEOUT_SECS,
             tls_backend,
             ca_cert_path.as_deref(),
         )
         .expect("创建 HTTP 客户端失败");
         let mut cache = HashMap::new();
-        cache.insert((proxy.clone(), false), initial_client);
+        cache.insert(proxy.clone(), initial_client);
 
         Self {
             token_manager,
@@ -138,30 +130,23 @@ impl KiroProvider {
     }
 
     /// 根据账号的代理配置获取（或创建并缓存）对应的 reqwest::Client
-    ///
-    /// 历史上按请求类型分两档超时（参数 `use_long_timeout` 区分），现统一为
-    /// `UPSTREAM_TIMEOUT_SECS`。参数保留以兼容既有调用点，两档构建的 Client
-    /// 超时一致，仅缓存 key 隔离。
     pub(crate) fn client_for(
         &self,
         credentials: &KiroCredentials,
-        use_long_timeout: bool,
     ) -> anyhow::Result<Client> {
         let effective = credentials.effective_proxy(self.global_proxy.as_ref());
-        let key = (effective.clone(), use_long_timeout);
+        let key = effective.clone();
         let mut cache = self.client_cache.lock();
         if let Some(client) = cache.get(&key) {
             return Ok(client.clone());
         }
-        let timeout_secs = UPSTREAM_TIMEOUT_SECS;
         tracing::debug!(
-            "[CLIENT] 创建新 Client：use_long_timeout={} timeout_secs={}",
-            use_long_timeout,
-            timeout_secs
+            "[CLIENT] 创建新 Client：read_timeout_secs={}",
+            UPSTREAM_READ_TIMEOUT_SECS
         );
-        let client = build_client(
+        let client = build_upstream_client(
             effective.as_ref(),
-            timeout_secs,
+            UPSTREAM_READ_TIMEOUT_SECS,
             self.tls_backend,
             self.ca_cert_path.as_deref(),
         )?;

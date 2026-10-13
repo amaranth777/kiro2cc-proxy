@@ -49,10 +49,6 @@ impl KiroProvider {
         bound_ids: &[u64],
     ) -> anyhow::Result<(reqwest::Response, u64)> {
         let _permit = self.concurrency_limit.acquire().await?;
-        // 流式请求的响应体在上游 200 headers 返回后仍持续生成，受 reqwest
-        // 总超时约束，统一使用 `UPSTREAM_TIMEOUT_SECS` 长超时档；若使用较短
-        // 档位会在长生成中途被掐断（历史分档背景见常量注释）
-        let use_long_timeout = is_stream || is_compact;
         let effective_pool = if bound_ids.is_empty() {
             self.token_manager.total_count()
         } else {
@@ -181,7 +177,7 @@ impl KiroProvider {
             };
 
             // 发送请求
-            let client = match self.client_for(&ctx.credentials, use_long_timeout) {
+            let client = match self.client_for(&ctx.credentials) {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = Some(e);

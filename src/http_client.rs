@@ -42,7 +42,7 @@ impl ProxyConfig {
 ///
 /// # Arguments
 /// * `proxy` - 可选的代理配置
-/// * `timeout_secs` - 超时时间（秒）
+/// * `timeout_secs` - 元数据请求的总超时时间（秒）
 /// * `ca_cert_path` - 可选的额外 CA 证书路径（PEM 格式）
 ///
 /// # Returns
@@ -53,11 +53,54 @@ pub fn build_client(
     tls_backend: TlsBackend,
     ca_cert_path: Option<&str>,
 ) -> anyhow::Result<Client> {
+    build_client_inner(
+        proxy,
+        Some(timeout_secs),
+        None,
+        tls_backend,
+        ca_cert_path,
+    )
+}
+
+/// 构建生成请求使用的 HTTP Client
+///
+/// 不设置总超时，避免长生成或大响应体在读取完成前被整体截断；
+/// `read_timeout` 仅用于检测响应读取停滞，每次成功读取后重置。
+pub fn build_upstream_client(
+    proxy: Option<&ProxyConfig>,
+    read_timeout_secs: u64,
+    tls_backend: TlsBackend,
+    ca_cert_path: Option<&str>,
+) -> anyhow::Result<Client> {
+    build_client_inner(
+        proxy,
+        None,
+        Some(read_timeout_secs),
+        tls_backend,
+        ca_cert_path,
+    )
+}
+
+fn build_client_inner(
+    proxy: Option<&ProxyConfig>,
+    total_timeout_secs: Option<u64>,
+    read_timeout_secs: Option<u64>,
+    tls_backend: TlsBackend,
+    ca_cert_path: Option<&str>,
+) -> anyhow::Result<Client> {
     let mut builder = Client::builder()
-        .timeout(Duration::from_secs(timeout_secs))
+        .connect_timeout(Duration::from_secs(10))
         .pool_max_idle_per_host(20)
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(30));
+
+    if let Some(timeout_secs) = total_timeout_secs {
+        builder = builder.timeout(Duration::from_secs(timeout_secs));
+    }
+
+    if let Some(timeout_secs) = read_timeout_secs {
+        builder = builder.read_timeout(Duration::from_secs(timeout_secs));
+    }
 
     if tls_backend == TlsBackend::Rustls {
         builder = builder.use_rustls_tls();
@@ -115,6 +158,12 @@ mod tests {
     fn test_build_client_with_proxy() {
         let config = ProxyConfig::new("http://127.0.0.1:7890");
         let client = build_client(Some(&config), 30, TlsBackend::Rustls, None);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_build_upstream_client() {
+        let client = build_upstream_client(None, 1000, TlsBackend::Rustls, None);
         assert!(client.is_ok());
     }
 }

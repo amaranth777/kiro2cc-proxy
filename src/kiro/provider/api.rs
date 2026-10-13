@@ -32,7 +32,6 @@ impl KiroProvider {
     /// # Arguments
     /// * `request_body` - JSON 格式的请求体字符串
     /// * `is_compact` - 是否为 Claude Code `/compact` 压缩请求
-    ///   （超时统一为 `UPSTREAM_TIMEOUT_SECS`，历史分档已移除）
     ///
     /// # Returns
     /// 返回原始的 HTTP Response，调用方负责处理流式数据
@@ -56,7 +55,7 @@ impl KiroProvider {
     /// 发送 MCP API 请求
     ///
     /// 用于 WebSearch 等工具调用。MCP 调用不涉及 `/compact` 压缩语义，
-    /// 与普通请求共用统一超时（`UPSTREAM_TIMEOUT_SECS`）。
+    /// 与普通生成请求共用无总超时的上游 Client。
     ///
     /// # Arguments
     /// * `request_body` - JSON 格式的 MCP 请求体字符串
@@ -145,7 +144,7 @@ impl KiroProvider {
             };
 
             // 发送请求（MCP 调用不涉及 /compact 压缩语义，固定使用普通超时）
-            let client = match self.client_for(&ctx.credentials, false) {
+            let client = match self.client_for(&ctx.credentials) {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = Some(e);
