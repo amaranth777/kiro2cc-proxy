@@ -111,7 +111,7 @@ mod tests {
         }));
         let out = resolve_after_refresh(&cache, None);
         assert_eq!(out.len(), build_model_list().len());
-        assert!(out.iter().any(|model| model.id == "claude-3-5-sonnet-20241022"));
+        assert!(out.iter().any(|model| model.id == "claude-opus-4-6"));
         assert!(!out.iter().any(|model| model.id == "old"));
     }
 
@@ -121,7 +121,7 @@ mod tests {
         let cache = new_cache(None);
         let out = resolve_after_refresh(&cache, None);
         assert_eq!(out.len(), build_model_list().len());
-        assert!(out.iter().any(|m| m.id == "claude-3-5-sonnet-20241022"));
+        assert!(out.iter().any(|m| m.id == "claude-opus-4-6"));
     }
 
     // 分支 5：无 provider → fetch_models_dynamic 直接回退静态表
@@ -142,7 +142,7 @@ mod tests {
     async fn test_get_model_hit() {
         let resp = get_model(
             State(test_state()),
-            axum::extract::Path("claude-3-5-sonnet-20241022".to_string()),
+            axum::extract::Path("claude-opus-4-6".to_string()),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -190,66 +190,12 @@ mod tests {
     }
 
     #[test]
-    fn test_fable_5_present() {
-        let m = find_by_id("claude-fable-5").expect("claude-fable-5 应存在");
-        assert_eq!(m.max_tokens, 128000);
-        assert_eq!(m.owned_by, "anthropic");
-        assert_eq!(m.object, "model");
-        assert_eq!(m.model_type, "chat");
-        assert_eq!(m.display_name, "Claude Fable 5");
-    }
-
-    #[test]
-    fn test_fable_5_thinking_present() {
-        let m = find_by_id("claude-fable-5-thinking").expect("claude-fable-5-thinking 应存在");
-        assert_eq!(m.max_tokens, 128000);
-        assert_eq!(m.display_name, "Claude Fable 5 (Thinking)");
-    }
-
-    #[test]
-    fn test_haiku_4_5_max_tokens_unchanged() {
-        // 回归：haiku-4-5 max_tokens 维持 64000
-        let m = find_by_id("claude-haiku-4-5-20251001").expect("haiku 条目缺失");
-        assert_eq!(m.max_tokens, 64000);
-    }
-
-    #[test]
-    fn test_opus_4_7_4_8_max_tokens_unchanged() {
-        // 回归
-        assert_eq!(find_by_id("claude-opus-4-7").unwrap().max_tokens, 128000);
+    fn test_allowed_model_max_tokens_unchanged() {
         assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 128000);
-    }
-
-    #[test]
-    fn test_build_model_list_includes_opus_5() {
-        let list = build_model_list();
-        let ids: std::collections::HashSet<&str> = list.iter().map(|m| m.id.as_str()).collect();
-
-        assert!(ids.contains("claude-opus-5"), "缺 claude-opus-5 静态表项");
-        assert!(
-            ids.contains("claude-opus-5-thinking"),
-            "缺 claude-opus-5-thinking 静态表项"
+        assert_eq!(
+            find_by_id("claude-opus-4-8-thinking").unwrap().max_tokens,
+            128000
         );
-
-        let opus5 = list.iter().find(|m| m.id == "claude-opus-5").unwrap();
-        assert_eq!(opus5.owned_by, "anthropic");
-        assert_eq!(opus5.display_name, "Claude Opus 5");
-        assert_eq!(opus5.max_tokens, 128000);
-
-        let opus5t = list
-            .iter()
-            .find(|m| m.id == "claude-opus-5-thinking")
-            .unwrap();
-        assert_eq!(opus5t.owned_by, "anthropic");
-        assert_eq!(opus5t.display_name, "Claude Opus 5 (Thinking)");
-        assert_eq!(opus5t.max_tokens, 128000);
-
-        // 回归：sonnet-5 仍在
-        assert!(ids.contains("claude-sonnet-5"));
-        assert!(ids.contains("claude-sonnet-5-thinking"));
-        // 回归：opus-4.7/4.8 仍在
-        assert!(ids.contains("claude-opus-4-7"));
-        assert!(ids.contains("claude-opus-4-8"));
     }
 
     #[test]

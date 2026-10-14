@@ -19,7 +19,7 @@
 
 #### 场景：默认顺序
 - **WHEN** 调用 `Endpoint::default_order()`
-- **THEN** 返回 `[Ide, Runtime, Codewhisperer, Amazonq]`（固定顺序）
+- **THEN** 返回 `[Ide, Runtime, Amazonq, Codewhisperer]`（固定顺序）
 
 ### 需求：桶级 429 状态独立
 #### 场景：单账号 4 桶互不影响
@@ -36,13 +36,13 @@
 ### 需求：端点选择与 429 切换
 #### 场景：默认顺序轮询（无封禁）
 - **WHEN** 账号未配置 `endpoint` 字段，且 4 桶均未封禁
-- **THEN** `effective_endpoints(region)` 返回 `[Ide, Runtime, Codewhisperer, Amazonq]`
-- **AND** `select_endpoint(ctx, attempt=0)` 返回 `Ide`，`attempt=1` 返回 `Runtime`，`attempt=2` 返回 `Codewhisperer`，`attempt=3` 回到 `Ide`
+- **THEN** `effective_endpoints(region)` 返回 `[Ide, Runtime, Amazonq, Codewhisperer]`
+- **AND** `select_endpoint(ctx, attempt=0)` 返回 `Ide`，`attempt=1` 返回 `Runtime`，`attempt=2` 返回 `Amazonq`，`attempt=3` 返回 `Codewhisperer`
 
 #### 场景：跳过被封禁桶
 - **WHEN** 4 桶中 `Ide` 被封禁
 - **THEN** `select_endpoint(ctx, attempt=0)` 返回 `Runtime`（跳过 `Ide`）
-- **AND** `select_endpoint(ctx, attempt=2)` 返回 `Amazonq`（跳过 `Ide` + `Codewhisperer` 不封禁，但 attempt=2 偏移到 `Codewhisperer`）
+- **AND** `select_endpoint(ctx, attempt=2)` 返回 `Amazonq`（attempt=2 偏移到 `Amazonq`）
 
 #### 场景：账号声明首选端点
 - **WHEN** 账号 `endpoint = ["Runtime", "Codewhisperer"]`
@@ -50,7 +50,7 @@
 
 #### 场景：账号仅声明单个端点
 - **WHEN** 账号 `endpoint = ["Runtime"]`
-- **THEN** `effective_endpoints(region)` 返回 `[Runtime, Ide, Codewhisperer, Amazonq]`（首选 + 兜底全集）
+- **THEN** `effective_endpoints(region)` 返回 `[Runtime, Ide, Amazonq, Codewhisperer]`（首选 + 兜底全集）
 
 #### 场景：账号声明非法端点名（serde 忽略）
 - **WHEN** `credentials.json` 的 `endpoint` 字段包含 `"invalid_endpoint"`
@@ -59,7 +59,7 @@
 
 #### 场景：4 桶全 429 返回明确错误
 - **WHEN** 账号 A 的 4 桶在 3 次 attempts 内全部 429
-- **THEN** 返回 `Err(ProviderError::AllEndpointsThrottled { credential_id: A, endpoints: [Ide, Runtime, Codewhisperer, Amazonq] })`
+- **THEN** 返回 `Err(ProviderError::AllEndpointsThrottled { credential_id: A, endpoints: [Ide, Runtime, Amazonq, Codewhisperer] })`
 - **AND** 对外 HTTP 响应 502 + JSON 错误体含 `credential_id` 与 `endpoints` 列表
 - **AND** `tracing::error!` 输出账号 id + 端点名
 

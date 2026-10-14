@@ -25,7 +25,7 @@ Kiro 上游的多个接入端点（`ide` / `runtime` / `codewhisperer` / `amazon
 - `KiroProvider` 在请求层引入端点选择 + 429 切换逻辑（沿用现有 `call_api_with_retry` 重试骨架）
 - 单账号 4 桶独立计数；端点切换不触发账号切换
 - 端点切换与账号切换正交：单次 attempt 选 1 个端点，3 次 attempts = 最多 3 个端点，3 次后由外层重试决定是否切账号
-- 默认端点顺序：`ide` → `runtime` → `codewhisperer` → `amazonq`（依据：① `ide` 与现行 provider 默认行为一致，迁移最小化；② `runtime` 域名独立，作为次选；③ `codewhisperer` / `amazonq` 走 `x-amz-target` 路由差异，作为最后均衡）
+- 默认端点顺序：`ide` → `runtime` → `amazonq` → `codewhisperer`（依据：① `ide` 与现行 provider 默认行为一致，迁移最小化；② `runtime` 域名独立，作为次选；③ `amazonq` 走 `x-amz-target` 路由差异，作为第三兜底；④ `codewhisperer` 对当前 Claude 5.x 模型不兼容，仅保留为最后回退）
 - 单元测试：端点枚举 / 桶独立计数 / 429 切换 / 优先级回退 / 端点耗尽升级切账号
 
 **不在范围内：**
@@ -50,7 +50,7 @@ Kiro 上游的多个接入端点（`ide` / `runtime` / `codewhisperer` / `amazon
    impl Endpoint {
        pub fn by_name(name: EndpointName, region: &str) -> Self;
        pub fn all(region: &str) -> [Endpoint; 4];
-       pub fn default_order() -> [EndpointName; 4];  // [Ide, Runtime, Codewhisperer, Amazonq]
+       pub fn default_order() -> [EndpointName; 4];  // [Ide, Runtime, Amazonq, Codewhisperer]
    }
    ```
    桶状态：

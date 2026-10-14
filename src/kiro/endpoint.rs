@@ -36,8 +36,8 @@ impl EndpointName {
     pub const ALL: [EndpointName; 4] = [
         EndpointName::Ide,
         EndpointName::Runtime,
-        EndpointName::Codewhisperer,
         EndpointName::Amazonq,
+        EndpointName::Codewhisperer,
     ];
 
     /// 序列化 / 选择时使用的 kebab-case 字符串
@@ -100,8 +100,8 @@ impl Endpoint {
         [
             Self::by_name(EndpointName::Ide, region),
             Self::by_name(EndpointName::Runtime, region),
-            Self::by_name(EndpointName::Codewhisperer, region),
             Self::by_name(EndpointName::Amazonq, region),
+            Self::by_name(EndpointName::Codewhisperer, region),
         ]
     }
 }

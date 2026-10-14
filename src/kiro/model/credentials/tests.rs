@@ -928,8 +928,8 @@ mod tests {
         assert_eq!(eps.len(), 4);
         assert_eq!(eps[0].name, EndpointName::Ide);
         assert_eq!(eps[1].name, EndpointName::Runtime);
-        assert_eq!(eps[2].name, EndpointName::Codewhisperer);
-        assert_eq!(eps[3].name, EndpointName::Amazonq);
+        assert_eq!(eps[2].name, EndpointName::Amazonq);
+        assert_eq!(eps[3].name, EndpointName::Codewhisperer);
     }
 
     #[test]
@@ -955,8 +955,8 @@ mod tests {
             vec![
                 EndpointName::Runtime,
                 EndpointName::Ide,
-                EndpointName::Codewhisperer,
                 EndpointName::Amazonq,
+                EndpointName::Codewhisperer,
             ]
         );
     }

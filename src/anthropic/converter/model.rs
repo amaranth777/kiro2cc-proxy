@@ -46,8 +46,6 @@ pub fn map_model(model: &str) -> Option<String> {
         } else {
             Some("claude-sonnet-4.5".to_string())
         }
-    } else if model_lower.contains("fable") {
-        Some("claude-fable-5".to_string())
     } else if model_lower.contains("opus") {
         if model_lower.contains("5.5") || model_lower.contains("5-5") {
             // claude-opus-5.5：5.5 代际，Max Input 1M / Max Output 128K（档位沿用 5 代）

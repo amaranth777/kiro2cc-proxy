@@ -207,18 +207,6 @@ fn test_map_model_thinking_suffix_haiku() {
 }
 
 #[test]
-fn test_map_model_fable_routes_to_kiro_fable() {
-    assert_eq!(
-        map_model("claude-fable-5"),
-        Some("claude-fable-5".to_string())
-    );
-    assert_eq!(
-        map_model("claude-fable-5-thinking"),
-        Some("claude-fable-5".to_string())
-    );
-}
-
-#[test]
 fn test_map_model_opus_4_6_unchanged() {
     // 回归：opus-4-6 默认走 claude-opus-4.6
     assert_eq!(

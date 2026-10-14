@@ -12,17 +12,21 @@ use axum::{
 };
 use std::time::Duration;
 
-/// 仅屏蔽显式列出的模型；未列出的模型保持可见，便于新模型无需改代码即可发现。
+/// 仅屏蔽显式列出的模型族；按 `map_model()` 归一化后判断，日期版和 thinking 别名一并隐藏。
+/// 未列出的模型保持可见，便于新模型无需改代码即可发现。
 const BLOCKED_MODEL_IDS: &[&str] = &[
     "auto",
-    "claude-opus-4.5",
-    "claude-sonnet-4.5",
-    "claude-sonnet-4",
     "claude-haiku-4.5",
+    "claude-opus-4.5",
+    "claude-opus-4.7",
+    "claude-opus-5",
+    "claude-sonnet-4",
+    "claude-sonnet-4.5",
+    "claude-sonnet-5",
     "deepseek-3.2",
-    "minimax-m2.5",
-    "minimax-m2.1",
     "glm-5",
+    "minimax-m2.1",
+    "minimax-m2.5",
     "qwen3-coder-next",
 ];
 
@@ -43,7 +47,9 @@ pub(crate) type ModelCache =
     std::sync::Arc<parking_lot::RwLock<Option<super::super::middleware::CachedModels>>>;
 
 pub(crate) fn is_blocked_model(id: &str) -> bool {
-    BLOCKED_MODEL_IDS.contains(&id)
+    let canonical_id = crate::anthropic::converter::map_model(id)
+        .unwrap_or_else(|| id.trim().to_lowercase());
+    BLOCKED_MODEL_IDS.contains(&canonical_id.as_str())
 }
 
 fn visible_models(models: Vec<Model>) -> Vec<Model> {
@@ -402,26 +408,6 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             created: 1777500000,
             owned_by: "anthropic".to_string(),
             display_name: "Claude Opus 5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            context_window: None,
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-fable-5".to_string(),
-            object: "model".to_string(),
-            created: 1772582400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Fable 5".to_string(),
-            model_type: "chat".to_string(),
-            context_window: None,
-            max_tokens: 128000,
-        },
-        Model {
-            id: "claude-fable-5-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1772582400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Fable 5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
             context_window: None,
             max_tokens: 128000,

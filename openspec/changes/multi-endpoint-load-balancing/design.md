@@ -48,12 +48,13 @@ pub struct EndpointBucketRegistry {
 
 与现有 `throttle_delay(attempt)` 最大档对齐（`provider.rs::throttle_delay`）。不引入自适应窗口。后续 issue 可调参。
 
-### 决策 4：默认端点顺序 `ide → runtime → codewhisperer → amazonq`
+### 决策 4：默认端点顺序 `ide → runtime → amazonq → codewhisperer`
 
 依据：
 - `ide` 与现行 provider 默认行为完全一致（`q.{region}.amazonaws.com` 无 `x-amz-target`）—— 最小迁移风险
 - `runtime` 域名独立，是天然次选
-- `codewhisperer` / `amazonq` 走 `x-amz-target` 路由差异，作为兜底
+- `amazonq` 走 `x-amz-target` 路由差异，是第三个可用兜底
+- `codewhisperer` 对当前 Claude 5.x 模型返回 `INVALID_MODEL_ID`，调整为默认序最后，仅保留显式配置与应急回退能力
 
 ### 决策 5：`Endpoint` 物化 host（不存 host_pattern 函数指针）
 

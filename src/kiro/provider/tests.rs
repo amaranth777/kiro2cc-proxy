@@ -580,7 +580,7 @@ mod tests {
         let picked = provider
             .select_endpoint(&creds, 0)
             .expect("应跳过封禁桶返回剩余端点");
-        assert_eq!(picked.name, EndpointName::Codewhisperer);
+        assert_eq!(picked.name, EndpointName::Amazonq);
     }
 
     #[test]
@@ -592,7 +592,7 @@ mod tests {
         creds.refresh_token = Some("a".repeat(150));
         let provider = create_test_provider(config, creds.clone());
 
-        // 4 桶均未封禁：attempt=0/1/2/3 应轮询 Ide/Runtime/Codewhisperer/Amazonq
+        // 4 桶均未封禁：attempt=0/1/2/3 应轮询 Ide/Runtime/Amazonq/Codewhisperer
         assert_eq!(
             provider.select_endpoint(&creds, 0).unwrap().name,
             EndpointName::Ide
@@ -603,11 +603,11 @@ mod tests {
         );
         assert_eq!(
             provider.select_endpoint(&creds, 2).unwrap().name,
-            EndpointName::Codewhisperer
+            EndpointName::Amazonq
         );
         assert_eq!(
             provider.select_endpoint(&creds, 3).unwrap().name,
-            EndpointName::Amazonq
+            EndpointName::Codewhisperer
         );
         // attempt=4 回卷到 Ide
         assert_eq!(
