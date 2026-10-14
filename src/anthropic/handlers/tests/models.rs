@@ -210,6 +210,7 @@ mod tests {
             "claude-opus-4.7",
             "claude-opus-4-7",
             "claude-opus-4-7-thinking",
+            "claude-opus-4-8-thinking",
             "claude-opus-5",
             "claude-opus-5-thinking",
             "claude-sonnet-4.5",
@@ -218,6 +219,7 @@ mod tests {
             "claude-sonnet-4-5-20250929-thinking",
             "claude-sonnet-4",
             "claude-sonnet-4-20250514",
+            "claude-sonnet-4-6-thinking",
             "claude-sonnet-5",
             "claude-sonnet-5-thinking",
             "deepseek-3.2",
@@ -231,6 +233,10 @@ mod tests {
         assert!(list.iter().any(|model| model.id == "claude-sonnet-4-6"));
         assert!(list.iter().any(|model| model.id == "claude-opus-4-6"));
         assert!(list.iter().any(|model| model.id == "claude-opus-4-8"));
+        assert!(
+            list.iter()
+                .all(|model| !model.id.to_ascii_lowercase().ends_with("-thinking"))
+        );
     }
 
     #[test]
@@ -302,20 +308,42 @@ mod tests {
     }
 
     #[test]
+    fn test_build_model_catalog_hides_thinking_variants_case_insensitively() {
+        use crate::kiro::model::available_models::{AvailableModelInfo, TokenLimits};
+
+        let metadata = vec![
+            AvailableModelInfo {
+                model_id: "claude-opus-4-6-THINKING".to_string(),
+                model_name: "Claude Opus 4.6 Thinking".to_string(),
+                rate_multiplier: None,
+                token_limits: TokenLimits::default(),
+                additional_model_request_fields_schema: None,
+            },
+            AvailableModelInfo {
+                model_id: "future-model-Thinking".to_string(),
+                model_name: "Future Model Thinking".to_string(),
+                rate_multiplier: None,
+                token_limits: TokenLimits::default(),
+                additional_model_request_fields_schema: None,
+            },
+        ];
+
+        let models = build_model_catalog(Some(&metadata), true);
+        assert!(!models.iter().any(|model| {
+            model.id.to_ascii_lowercase().ends_with("-thinking")
+        }));
+        assert!(models.iter().any(|model| model.id == "claude-opus-4-6"));
+    }
+
+    #[test]
     fn test_opus_4_6_max_tokens_is_128k() {
         let m = find_by_id("claude-opus-4-6").expect("claude-opus-4-6 缺失");
         assert_eq!(m.max_tokens, 128000);
-        let mt = find_by_id("claude-opus-4-6-thinking").expect("claude-opus-4-6-thinking 缺失");
-        assert_eq!(mt.max_tokens, 128000);
     }
 
     #[test]
     fn test_allowed_model_max_tokens_unchanged() {
         assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 128000);
-        assert_eq!(
-            find_by_id("claude-opus-4-8-thinking").unwrap().max_tokens,
-            128000
-        );
     }
 
     #[test]

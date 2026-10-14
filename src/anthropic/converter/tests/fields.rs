@@ -258,7 +258,7 @@ fn test_claude_4_5_generation_additional_model_request_fields_is_none() {
     // 重构为仅判断 GPT 系而丢失，导致 haiku-4.5 全量 502。
     use crate::anthropic::types::{Message as AnthropicMessage, Thinking};
 
-    // 覆盖 /v1/models 暴露的带日期变体（含 -thinking）及简写形式
+    // 覆盖旧客户端可能传入的带日期变体（含 -thinking）及简写形式
     for model in [
         "claude-haiku-4-5",
         "claude-sonnet-4-5",

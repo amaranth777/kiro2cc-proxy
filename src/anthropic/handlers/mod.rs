@@ -18,7 +18,7 @@ mod stream;
 pub use helpers::count_tokens;
 pub(crate) use models::available_model_to_model;
 pub(crate) use models::build_model_list;
-pub(crate) use models::is_blocked_model;
+pub(crate) use models::is_hidden_model;
 pub use models::get_model;
 pub use models::get_models;
 pub use ping::ping;

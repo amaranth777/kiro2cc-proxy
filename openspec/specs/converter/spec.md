@@ -76,21 +76,17 @@
 
 ### 需求：`/v1/models` 暴露的模型清单（`src/anthropic/handlers.rs::build_model_list`）
 
-#### 场景：opus-4.6 暴露 128K max_tokens
+#### 场景：模型目录隐藏 thinking 变体
 - **WHEN** GET `/v1/models`
-- **THEN** 响应 `data[]` 中存在 `id="claude-opus-4-6"` 与 `id="claude-opus-4-6-thinking"` 两条目
-- **AND** 两者 `max_tokens` 字段值均为 `128000`
+- **THEN** 响应 `data[]` 仅保留普通模型 ID，不包含尾缀为 `-thinking` / `-Thinking` 的变体
+- **AND** `claude-opus-4-6` 保留且 `max_tokens` 为 `128000`
 
 #### 场景：其他模型规格保持不变
 - **WHEN** GET `/v1/models`
 - **THEN** 以下条目的 `max_tokens` 字段与本变更前完全一致：
   - `claude-sonnet-4-6` → `64000`
-  - `claude-sonnet-4-6-thinking` → `64000`
   - `claude-opus-4-7` → `128000`
-  - `claude-opus-4-7-thinking` → `128000`
   - `claude-opus-4-8` → `128000`
-  - `claude-opus-4-8-thinking` → `128000`
   - `claude-haiku-4-5-20251001` → `64000`
-  - `claude-haiku-4-5-20251001-thinking` → `64000`
   - 旧版 3.x / 4 / 4.5 / auto / deepseek / glm 条目全部保持原值
 

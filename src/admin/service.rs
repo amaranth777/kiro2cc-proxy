@@ -53,7 +53,7 @@ fn live_model_items(models: &[AvailableModelInfo]) -> Vec<super::types::AdminMod
         .iter()
         .filter(|info| {
             !info.model_id.trim().is_empty()
-                && !crate::anthropic::handlers::is_blocked_model(&info.model_id)
+                && !crate::anthropic::handlers::is_hidden_model(&info.model_id)
         })
         .map(live_model_to_admin_item)
         .collect()
@@ -741,6 +741,13 @@ mod tests {
         let models = vec![
             fake_info("auto", "Auto", Some(1.0), 100, 50),
             fake_info("", "", None, 100, 50),
+            fake_info(
+                "future-model-Thinking",
+                "Future Model Thinking",
+                None,
+                100,
+                50,
+            ),
             fake_info("future-model", "Future Model", None, 100, 50),
         ];
 

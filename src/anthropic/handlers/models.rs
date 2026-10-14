@@ -52,10 +52,23 @@ pub(crate) fn is_blocked_model(id: &str) -> bool {
     BLOCKED_MODEL_IDS.contains(&canonical_id.as_str())
 }
 
+/// 判断模型是否为 thinking 变体。
+///
+/// 模型目录只展示普通版本；`-thinking` / `-Thinking` 等旧别名仍由
+/// `map_model()` 归一化到普通模型，兼容已缓存模型列表的旧客户端。
+pub(crate) fn is_thinking_variant(id: &str) -> bool {
+    id.trim().to_ascii_lowercase().ends_with("-thinking")
+}
+
+/// 判断模型是否应从对外模型目录隐藏。
+pub(crate) fn is_hidden_model(id: &str) -> bool {
+    is_thinking_variant(id) || is_blocked_model(id)
+}
+
 fn visible_models(models: Vec<Model>) -> Vec<Model> {
     models
         .into_iter()
-        .filter(|model| !is_blocked_model(&model.id))
+        .filter(|model| !is_hidden_model(&model.id))
         .collect()
 }
 
@@ -74,7 +87,7 @@ pub(crate) fn build_model_catalog(
 
     let mut models = build_model_list();
     for info in metadata.unwrap_or_default() {
-        if info.model_id.trim().is_empty() || is_blocked_model(&info.model_id) {
+        if info.model_id.trim().is_empty() || is_hidden_model(&info.model_id) {
             continue;
         }
 

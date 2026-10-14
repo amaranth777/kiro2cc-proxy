@@ -185,17 +185,11 @@ mod tests {
     fn test_opus_4_6_max_tokens_is_128k() {
         let m = find_by_id("claude-opus-4-6").expect("claude-opus-4-6 缺失");
         assert_eq!(m.max_tokens, 128000);
-        let mt = find_by_id("claude-opus-4-6-thinking").expect("claude-opus-4-6-thinking 缺失");
-        assert_eq!(mt.max_tokens, 128000);
     }
 
     #[test]
     fn test_allowed_model_max_tokens_unchanged() {
         assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 128000);
-        assert_eq!(
-            find_by_id("claude-opus-4-8-thinking").unwrap().max_tokens,
-            128000
-        );
     }
 
     #[test]
