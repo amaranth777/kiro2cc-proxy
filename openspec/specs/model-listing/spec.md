@@ -4,7 +4,7 @@
 
 ### 需求：/v1/models 动态来源
 
-`GET /v1/models` 返回的模型列表以上游 Kiro `ListAvailableModels` 实时响应为准，带 TTL 缓存与静态表回退，端点在任何情况下都不得失败。
+`GET /v1/models` 返回的模型列表以上游 Kiro `ListAvailableModels` 实时响应为准，带 TTL 缓存；动态结果成功时只使用动态模型，动态结果不可用时回退到唯一的 `claude-opus-5.5` 静态项，端点在任何情况下都不得失败。
 
 #### 场景：缓存命中直接返回
 - **WHEN** 收到 `GET /v1/models` 且缓存存在且未超过 `modelCacheTtlSecs`
@@ -12,7 +12,7 @@
 
 #### 场景：缓存过期成功刷新
 - **WHEN** 缓存不存在或已超过 `modelCacheTtlSecs`，且上游 `ListAvailableModels` 调用成功返回非空模型集
-- **THEN** 将上游 `AvailableModelInfo` 映射为 Anthropic `Model`（`owned_by` 由 `guess_owned_by()` 按 ID 前缀推断，`max_tokens` 取 `token_limits.max_output_tokens`），写入缓存并返回
+- **THEN** 仅将上游 `AvailableModelInfo` 映射为 Anthropic `Model`（`owned_by` 由 `guess_owned_by()` 按 ID 前缀推断，`max_tokens` 取 `token_limits.max_output_tokens`），不混入静态别名，写入缓存并返回
 
 #### 场景：刷新失败且存在旧缓存
 - **WHEN** 缓存已过期，但上游调用失败（无可用账号 / 网络错误 / 非 2xx / 反序列化失败）
@@ -20,7 +20,7 @@
 
 #### 场景：刷新失败且无任何缓存
 - **WHEN** 上游调用失败且此前从未成功缓存过
-- **THEN** 回退返回 `build_model_list()` 静态表内容，记录 warn 日志，HTTP 状态仍为 200
+- **THEN** 回退返回唯一的 `claude-opus-5.5`，记录 warn 日志，HTTP 状态仍为 200
 
 #### 场景：GET /v1/models/{id} 与列表来源一致
 - **WHEN** 收到 `GET /v1/models/{model_id}`

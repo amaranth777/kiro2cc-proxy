@@ -378,7 +378,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_admin_models_matches_build_model_list() {
+    async fn test_get_admin_models_without_accounts_falls_back_static() {
         let response = get_admin_models(State(empty_admin_state()))
             .await
             .into_response();
@@ -400,14 +400,10 @@ mod tests {
             .collect();
         assert_eq!(actual_ids, expected_ids);
 
-        for id in [
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-            "claude-opus-4-8",
-        ] {
-            assert!(actual_ids.contains(id), "模型列表应包含 {id}");
-        }
+        assert_eq!(
+            actual_ids,
+            std::collections::HashSet::from(["claude-opus-5.5".to_string()])
+        );
 
         // 零账号场景下 list_available_models 必然失败，触发回退到本地静态模型表
         assert!(

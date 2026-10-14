@@ -74,19 +74,20 @@
 - **WHEN** 调用 `map_model` 传入 sonnet / opus / haiku 模型 ID
 - **THEN** 返回值与本变更前一致（sonnet-4.6 → claude-sonnet-4.6、opus-4-6 默认 → claude-opus-4.6、opus-4-7 → claude-opus-4.7、opus-4-8 → claude-opus-4.8、haiku → claude-haiku-4.5）
 
-### 需求：`/v1/models` 暴露的模型清单（`src/anthropic/handlers.rs::build_model_list`）
+### 需求：`/v1/models` 暴露的模型清单（`src/anthropic/handlers/models.rs::build_model_catalog`）
+
+动态模型发现成功时，模型目录完全使用 Kiro `ListAvailableModels` 返回的模型；本地静态目录只在动态模型不可用时作为回退，且仅包含 `claude-opus-5.5`。
 
 #### 场景：模型目录隐藏 thinking 变体
 - **WHEN** GET `/v1/models`
 - **THEN** 响应 `data[]` 仅保留普通模型 ID，不包含尾缀为 `-thinking` / `-Thinking` 的变体
-- **AND** `claude-opus-4-6` 保留且 `max_tokens` 为 `128000`
+- **AND** 动态结果中的普通模型 ID 原样保留，`-thinking` / `-Thinking` 变体不出现
 
-#### 场景：其他模型规格保持不变
-- **WHEN** GET `/v1/models`
-- **THEN** 以下条目的 `max_tokens` 字段与本变更前完全一致：
-  - `claude-sonnet-4-6` → `64000`
-  - `claude-opus-4-7` → `128000`
-  - `claude-opus-4-8` → `128000`
-  - `claude-haiku-4-5-20251001` → `64000`
-  - 旧版 3.x / 4 / 4.5 / auto / deepseek / glm 条目全部保持原值
+#### 场景：动态目录不混入静态别名
+- **WHEN** 动态发现成功并返回 `future-model`
+- **THEN** `/v1/models` 只返回动态目录中的模型，不额外注入 `claude-opus-5.5` 或历史静态别名
+
+#### 场景：动态目录不可用
+- **WHEN** 动态模型发现失败
+- **THEN** `/v1/models` 回退到唯一的 `claude-opus-5.5`
 

@@ -16,7 +16,7 @@ Admin API 需提供一个只读端点，返回当前代理支持的完整模型�
 
 ### 需求：模型费率倍率展示
 
-`GET /api/admin/models` 响应的模型行数据须直接来源于 Kiro `ListAvailableModels` 接口的实时调用结果（不使用本地静态表、不使用缓存），仅在上游调用失败时回退到本地静态模型表。
+`GET /api/admin/models` 响应的模型行数据须直接来源于 Kiro `ListAvailableModels` 接口的实时调用结果（不使用本地静态表、不使用缓存），仅在上游调用失败时回退到本地静态模型表。动态结果成功时不得混入静态模型，本地静态表仅保留 `claude-opus-5.5`。
 
 #### 场景：上游调用成功
 
@@ -26,7 +26,7 @@ Admin API 需提供一个只读端点，返回当前代理支持的完整模型�
 #### 场景：无可用账号或上游调用失败
 
 - **WHEN** 当前没有可用账号，或调用 Kiro `ListAvailableModels` 失败（网络错误、非 2xx 响应、响应体解析失败）
-- **THEN** `GET /api/admin/models` 仍返回 `200`，模型行回退为本地静态模型表（与 `/v1/models` 集合一致），所有条目的 `rate_multiplier` 均为 `null`
+- **THEN** `GET /api/admin/models` 仍返回 `200`，模型行回退为唯一的 `claude-opus-5.5`，`rate_multiplier` 为 `null`
 
 #### 场景：上游返回空模型列表
 

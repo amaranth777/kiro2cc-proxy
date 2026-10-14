@@ -123,8 +123,8 @@ mod tests {
     fn test_resolve_after_refresh_falls_back_when_all_models_are_blocked() {
         let cache = new_cache(None);
         let out = resolve_after_refresh(&cache, Some(vec![fake_model("auto")]));
-        assert_eq!(out.len(), build_model_list().len());
-        assert!(out.iter().any(|model| model.id == "claude-opus-4-6"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "claude-opus-5.5");
     }
 
     // 分支 3：刷新失败但有旧缓存 → 仍平滑回退静态表
@@ -135,8 +135,8 @@ mod tests {
             fetched_at: std::time::Instant::now(),
         }));
         let out = resolve_after_refresh(&cache, None);
-        assert_eq!(out.len(), build_model_list().len());
-        assert!(out.iter().any(|model| model.id == "claude-opus-4-6"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "claude-opus-5.5");
         assert!(!out.iter().any(|model| model.id == "old"));
     }
 
@@ -145,8 +145,8 @@ mod tests {
     fn test_resolve_after_refresh_failure_no_cache_falls_back_static() {
         let cache = new_cache(None);
         let out = resolve_after_refresh(&cache, None);
-        assert_eq!(out.len(), build_model_list().len());
-        assert!(out.iter().any(|m| m.id == "claude-opus-4-6"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "claude-opus-5.5");
     }
 
     // 分支 5：无 provider → fetch_models_dynamic 直接回退静态表
@@ -155,7 +155,8 @@ mod tests {
         let state = AppState::new();
         assert!(state.kiro_provider.is_none());
         let out = fetch_models_dynamic(&state).await;
-        assert_eq!(out.len(), build_model_list().len());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "claude-opus-5.5");
     }
 
     fn test_state() -> AppState {
@@ -167,7 +168,7 @@ mod tests {
     async fn test_get_model_hit() {
         let resp = get_model(
             State(test_state()),
-            axum::extract::Path("claude-opus-4-6".to_string()),
+            axum::extract::Path("claude-opus-5.5".to_string()),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -195,48 +196,10 @@ mod tests {
     }
 
     #[test]
-    fn test_build_model_list_hides_blocked_models() {
+    fn test_build_model_list_is_minimal_static_fallback() {
         let list = build_model_list();
-        for id in [
-            "auto",
-            "claude-haiku-4.5",
-            "claude-haiku-4-5",
-            "claude-haiku-4-5-20251001",
-            "claude-haiku-4-5-20251001-thinking",
-            "claude-opus-4.5",
-            "claude-opus-4-5",
-            "claude-opus-4-5-20251101",
-            "claude-opus-4-5-20251101-thinking",
-            "claude-opus-4.7",
-            "claude-opus-4-7",
-            "claude-opus-4-7-thinking",
-            "claude-opus-4-8-thinking",
-            "claude-opus-5",
-            "claude-opus-5-thinking",
-            "claude-sonnet-4.5",
-            "claude-sonnet-4-5",
-            "claude-sonnet-4-5-20250929",
-            "claude-sonnet-4-5-20250929-thinking",
-            "claude-sonnet-4",
-            "claude-sonnet-4-20250514",
-            "claude-sonnet-4-6-thinking",
-            "claude-sonnet-5",
-            "claude-sonnet-5-thinking",
-            "deepseek-3.2",
-            "glm-5",
-            "minimax-m2.1",
-            "minimax-m2.5",
-            "qwen3-coder-next",
-        ] {
-            assert!(!list.iter().any(|model| model.id == id), "{id} 不应可见");
-        }
-        assert!(list.iter().any(|model| model.id == "claude-sonnet-4-6"));
-        assert!(list.iter().any(|model| model.id == "claude-opus-4-6"));
-        assert!(list.iter().any(|model| model.id == "claude-opus-4-8"));
-        assert!(
-            list.iter()
-                .all(|model| !model.id.to_ascii_lowercase().ends_with("-thinking"))
-        );
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "claude-opus-5.5");
     }
 
     #[test]
@@ -263,48 +226,33 @@ mod tests {
     }
 
     #[test]
-    fn test_build_model_catalog_enriches_static_and_appends_new_models() {
+    fn test_build_model_catalog_uses_dynamic_models_without_static_aliases() {
         use crate::kiro::model::available_models::{AvailableModelInfo, TokenLimits};
 
-        let metadata = vec![
-            AvailableModelInfo {
-                model_id: "claude-sonnet-4-6".to_string(),
-                model_name: "Live Sonnet".to_string(),
-                rate_multiplier: Some(1.3),
-                token_limits: TokenLimits {
-                    max_input_tokens: 1_000_000,
-                    max_output_tokens: 99_999,
-                },
-                additional_model_request_fields_schema: None,
+        let metadata = vec![AvailableModelInfo {
+            model_id: "future-model".to_string(),
+            model_name: "Future Model".to_string(),
+            rate_multiplier: None,
+            token_limits: TokenLimits {
+                max_input_tokens: 1_000_000,
+                max_output_tokens: 99_999,
             },
-            AvailableModelInfo {
-                model_id: "future-model".to_string(),
-                model_name: "Future Model".to_string(),
-                rate_multiplier: None,
-                token_limits: TokenLimits::default(),
-                additional_model_request_fields_schema: None,
-            },
-        ];
+            additional_model_request_fields_schema: None,
+        }];
 
         let models = build_model_catalog(Some(&metadata), true);
-        let sonnet = models
-            .iter()
-            .find(|model| model.id == "claude-sonnet-4-6")
-            .unwrap();
-        assert_eq!(sonnet.display_name, "Live Sonnet");
-        assert_eq!(sonnet.max_tokens, 99_999);
-        assert!(models.iter().any(|model| model.id == "future-model"));
-        assert!(models.iter().any(|model| model.id == "claude-opus-4-8"));
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "future-model");
+        assert_eq!(models[0].display_name, "Future Model");
+        assert_eq!(models[0].max_tokens, 99_999);
+        assert!(!models.iter().any(|model| model.id == "claude-opus-5.5"));
 
         let fallback = build_model_catalog(Some(&metadata), false);
-        assert!(fallback.iter().any(|model| model.id == "claude-opus-4-8"));
+        assert_eq!(fallback.len(), 1);
+        assert_eq!(fallback[0].id, "claude-opus-5.5");
         assert!(!fallback.iter().any(|model| model.id == "future-model"));
-        let fallback_sonnet = fallback
-            .iter()
-            .find(|model| model.id == "claude-sonnet-4-6")
-            .unwrap();
-        assert_eq!(fallback_sonnet.display_name, "Claude Sonnet 4.6");
-        assert_eq!(fallback_sonnet.max_tokens, 64_000);
+        assert_eq!(fallback[0].display_name, "Claude Opus 5.5");
+        assert_eq!(fallback[0].max_tokens, 128_000);
     }
 
     #[test]
@@ -329,26 +277,17 @@ mod tests {
         ];
 
         let models = build_model_catalog(Some(&metadata), true);
+        assert_eq!(models.len(), 1);
         assert!(!models.iter().any(|model| {
             model.id.to_ascii_lowercase().ends_with("-thinking")
         }));
-        assert!(models.iter().any(|model| model.id == "claude-opus-4-6"));
+        assert!(models.iter().any(|model| model.id == "claude-opus-5.5"));
     }
 
     #[test]
-    fn test_opus_4_6_max_tokens_is_128k() {
-        let m = find_by_id("claude-opus-4-6").expect("claude-opus-4-6 缺失");
-        assert_eq!(m.max_tokens, 128000);
-    }
-
-    #[test]
-    fn test_allowed_model_max_tokens_unchanged() {
-        assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 128000);
-    }
-
-    #[test]
-    fn test_sonnet_4_6_max_tokens_unchanged() {
-        // 回归
-        assert_eq!(find_by_id("claude-sonnet-4-6").unwrap().max_tokens, 64000);
+    fn test_static_opus_5_5_limits() {
+        let model = find_by_id("claude-opus-5.5").expect("claude-opus-5.5 缺失");
+        assert_eq!(model.context_window, Some(1_000_000));
+        assert_eq!(model.max_tokens, 128_000);
     }
 }

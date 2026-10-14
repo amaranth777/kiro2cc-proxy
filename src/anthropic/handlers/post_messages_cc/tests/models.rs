@@ -110,8 +110,8 @@ mod tests {
             fetched_at: std::time::Instant::now(),
         }));
         let out = resolve_after_refresh(&cache, None);
-        assert_eq!(out.len(), build_model_list().len());
-        assert!(out.iter().any(|model| model.id == "claude-opus-4-6"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "claude-opus-5.5");
         assert!(!out.iter().any(|model| model.id == "old"));
     }
 
@@ -120,8 +120,8 @@ mod tests {
     fn test_resolve_after_refresh_failure_no_cache_falls_back_static() {
         let cache = new_cache(None);
         let out = resolve_after_refresh(&cache, None);
-        assert_eq!(out.len(), build_model_list().len());
-        assert!(out.iter().any(|m| m.id == "claude-opus-4-6"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "claude-opus-5.5");
     }
 
     // 分支 5：无 provider → fetch_models_dynamic 直接回退静态表
@@ -130,7 +130,8 @@ mod tests {
         let state = AppState::new();
         assert!(state.kiro_provider.is_none());
         let out = fetch_models_dynamic(&state).await;
-        assert_eq!(out.len(), build_model_list().len());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "claude-opus-5.5");
     }
 
     fn test_state() -> AppState {
@@ -142,7 +143,7 @@ mod tests {
     async fn test_get_model_hit() {
         let resp = get_model(
             State(test_state()),
-            axum::extract::Path("claude-opus-4-6".to_string()),
+            axum::extract::Path("claude-opus-5.5".to_string()),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -182,20 +183,10 @@ mod tests {
     }
 
     #[test]
-    fn test_opus_4_6_max_tokens_is_128k() {
-        let m = find_by_id("claude-opus-4-6").expect("claude-opus-4-6 缺失");
-        assert_eq!(m.max_tokens, 128000);
-    }
-
-    #[test]
-    fn test_allowed_model_max_tokens_unchanged() {
-        assert_eq!(find_by_id("claude-opus-4-8").unwrap().max_tokens, 128000);
-    }
-
-    #[test]
-    fn test_sonnet_4_6_max_tokens_unchanged() {
-        // 回归
-        assert_eq!(find_by_id("claude-sonnet-4-6").unwrap().max_tokens, 64000);
+    fn test_static_opus_5_5_limits() {
+        let model = find_by_id("claude-opus-5.5").expect("claude-opus-5.5 缺失");
+        assert_eq!(model.context_window, Some(1_000_000));
+        assert_eq!(model.max_tokens, 128_000);
     }
 
 }
